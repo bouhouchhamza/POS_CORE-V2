@@ -6,7 +6,7 @@ import {z} from 'zod';
 import { commercialCertificateSchema,offlineRequestSchema,businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@bimik/validation';
 import {fingerprint,verifyCertificate,type LicenseCertificate} from '../license/crypto.js';
 import {offlineProofPayload} from '@bimik/shared-types';
-import {businessTypeAllowed,certificateDeadline,certificateIsCurrent,certificateStatus} from '../license/policy.js';
+import {businessTypeAllowed,certificateIsCurrent,certificateStatus} from '../license/policy.js';
 import {readLocalCertificate as storedCertificate} from '../license/local-certificate.js';
 
 const now=()=>new Date().toISOString(),hash=(v:string)=>crypto.createHash('sha256').update(v).digest('hex'),cents=(v:number)=>Math.round(v*100),amount=(v:unknown)=>Number(v??0)/100;
@@ -257,7 +257,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
     return{data:{
       ...state,
       status:derived&&derived!=='active'?derived:certificate?(state.status==='legacy'?'activation_required':state.status):(state.status==='active'||state.status==='legacy'?'activation_required':state.status),
-      expires_at:certificate&&Number.isFinite(certificateDeadline(certificate))?new Date(certificateDeadline(certificate)).toISOString():state.expires_at,
+      expires_at:certificate?certificate.expires_at:state.expires_at,
       features:certificate?.features??[],
       certificate
     }};

@@ -1,5 +1,5 @@
 import { offlineProofPayload } from '@bimik/shared-types'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import {
@@ -250,19 +250,37 @@ export default function LicensePage() {
   const [request, setRequest] = useState<unknown>(null)
   const [qr, setQr] = useState('')
   const [configured, setConfigured] = useState(false)
+  const [activating, setActivating] = useState(false)
+  const [redirect, setRedirect] = useState<string | null>(null)
+  const activationInFlight = useRef(false)
   const certificate = status?.certificate as Record<string, unknown> | undefined
   const licensedBusinessType=typeof certificate?.business_type==='string'?certificate.business_type:null
+  const hasCommercialDuration = Boolean(certificate && 'expires_at' in certificate)
+  const lifetime = hasCommercialDuration && certificate?.expires_at == null
   const hasOfflinePolicy = Boolean(certificate && 'offline_validity_days' in certificate)
   const offlineDays = typeof certificate?.offline_validity_days === 'number' ? certificate.offline_validity_days : null
   const permanentOffline = hasOfflinePolicy && certificate?.offline_validity_days == null
 
-  const load = () =>
-    getLicenseStatus()
-      .then(setStatus)
-      .catch((value) => setError(getApiErrorMessage(value)))
+  const load = async () => {
+    const next = await getLicenseStatus()
+    setStatus(next)
+    return next
+  }
+
+  const refreshActivatedState = async () => {
+    const [nextStatus, setup] = await Promise.all([
+      getLicenseStatus(),
+      getSetupStatus(),
+    ])
+    setStatus(nextStatus)
+    setConfigured(setup.configured)
+    if (nextStatus.status === 'active' || nextStatus.status === 'development') {
+      setRedirect(setup.configured ? '/login' : '/setup')
+    }
+  }
 
   useEffect(() => {
-    void load()
+    void load().catch((value) => setError(getApiErrorMessage(value)))
     void getSetupStatus()
       .then((setup) => {
         setConfigured(setup.configured)
@@ -272,6 +290,9 @@ export default function LicensePage() {
   }, [])
 
   async function online() {
+    if (activationInFlight.current) return
+    activationInFlight.current = true
+    setActivating(true)
     try {
       setError(null)
 
@@ -317,11 +338,12 @@ export default function LicensePage() {
       }
 
       setKey('')
-      await load()
-      const setup=await getSetupStatus()
-      if(!setup.configured)window.location.assign('/setup')
+      await refreshActivatedState()
     } catch (value) {
       setError(getApiErrorMessage(value))
+    } finally {
+      activationInFlight.current = false
+      setActivating(false)
     }
   }
   async function offline() {
@@ -393,6 +415,9 @@ export default function LicensePage() {
     }catch(value){setError(getApiErrorMessage(value))}
   }
   async function imported(file: File) {
+    if (activationInFlight.current) return
+    activationInFlight.current = true
+    setActivating(true)
     try {
       setError(null)
 
@@ -419,14 +444,21 @@ export default function LicensePage() {
         device_proof,
       })
 
-      await load()
+      await refreshActivatedState()
     } catch (value) {
       setError(getApiErrorMessage(value))
+    } finally {
+      activationInFlight.current = false
+      setActivating(false)
     }
   }
   const isOperational =
     status?.status === 'active' ||
     status?.status === 'development'
+
+  if (redirect) {
+    return <Navigate to={redirect} replace />
+  }
 
   if (configured && isOperational) {
     return <Navigate to="/login" replace />
@@ -466,11 +498,11 @@ export default function LicensePage() {
           </div>
 
           <div className="license-status-meta">
-            {status?.expires_at ? (
+            {hasCommercialDuration ? (
               <span>
-                <small>{t('license.expiration')}</small>
+                <small>{t('license.expirationLabel')}</small>
                 <strong>
-                  {new Date(status.expires_at).toLocaleDateString()}
+                  {lifetime ? t('license.lifetime') : new Date(String(certificate?.expires_at)).toLocaleDateString()}
                 </strong>
               </span>
             ) : null}
@@ -504,7 +536,7 @@ export default function LicensePage() {
         </article>
 
         <div className="license-activation-grid">
-          <article className="license-method-card license-online-card">
+          <form className="license-method-card license-online-card" onSubmit={(event)=>{event.preventDefault();void online()}}>
             <div className="license-method-head">
               <span className="license-method-index">01</span>
               <div>
@@ -528,13 +560,12 @@ export default function LicensePage() {
 
             <button
               className="button license-primary-action"
-              disabled={!key.trim()}
-              onClick={() => void online()}
-              type="button"
+              disabled={!key.trim() || activating}
+              type="submit"
             >
-              {t('license.activateDevice')}
+              {t(activating?'license.activating':'license.activate')}
             </button>
-          </article>
+          </form>
 
           <details className="license-method-card license-offline-card">
             <summary>
@@ -591,9 +622,11 @@ export default function LicensePage() {
                 <span>{t('license.importFile')}</span>
                 <input
                   accept=".poslic,application/json"
+                  disabled={activating}
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     if (file) void imported(file)
+                    event.target.value = ''
                   }}
                   type="file"
                 />

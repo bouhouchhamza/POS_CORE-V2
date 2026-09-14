@@ -38,3 +38,21 @@ test('null offline validity permits permanent offline while commercial expiry st
  const commerciallyExpired={...permanent,expires_at:'2026-10-01T00:00:00.000Z'}
  assert.equal(certificateStatus(commerciallyExpired,Date.parse('2026-10-01T00:00:00Z')),'expired')
 })
+
+test('lifetime and offline policy are enforced independently',()=>{
+ const lifetimePermanent={...certificate,issued_at:'2000-01-01T00:00:00.000Z',expires_at:null,offline_validity_days:null}
+ assert.equal(certificateStatus(lifetimePermanent,Date.parse('2099-01-01T00:00:00Z')),'active')
+
+ const lifetimeLimited={...certificate,expires_at:null,offline_validity_days:30}
+ assert.equal(certificateStatus(lifetimeLimited,Date.parse('2026-09-30T23:59:59Z')),'active')
+ assert.equal(certificateStatus(lifetimeLimited,Date.parse('2026-10-01T00:00:00Z')),'offline_validity_exceeded')
+
+ const datedPermanent={...certificate,offline_validity_days:null}
+ assert.equal(certificateStatus(datedPermanent,Date.parse('2026-09-30T23:59:59Z')),'active')
+ assert.equal(certificateStatus(datedPermanent,Date.parse('2026-10-01T00:00:00Z')),'expired')
+
+ const datedLimited={...certificate,offline_validity_days:30}
+ assert.equal(certificateStatus(datedLimited,Date.parse('2026-09-30T23:59:59Z')),'active')
+ assert.equal(certificateStatus(datedLimited,Date.parse('2026-10-01T00:00:00Z')),'expired')
+ assert.equal(certificateStatus({...datedLimited,expires_at:'2027-01-01T00:00:00.000Z'},Date.parse('2026-10-01T00:00:00Z')),'offline_validity_exceeded')
+})

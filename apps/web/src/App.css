@@ -3238,6 +3238,10 @@ textarea {
 .vendor-form-modal{width:min(760px,calc(100vw - 32px));max-height:90vh;overflow:auto}
 .vendor-form-modal form{display:grid;gap:14px}
 .vendor-form-modal label,.vendor-offline label{display:grid;gap:6px;font-weight:700}
+.vendor-policy-field{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;margin:0;padding:12px;border:1px solid var(--border);border-radius:8px}
+.vendor-policy-field legend{padding:0 5px;font-weight:800}
+.vendor-form-modal .vendor-policy-field>label{display:flex;align-items:center;gap:7px;font-weight:600}
+.vendor-form-modal .vendor-policy-field>label:has(input[type="datetime-local"]),.vendor-form-modal .vendor-policy-field>label:has(input[type="number"]){grid-column:1/-1;display:grid}
 .vendor-form-modal textarea{min-height:84px;resize:vertical}
 .vendor-feature-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
 .vendor-feature-grid label{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid var(--border);border-radius:6px;font-weight:600}
@@ -3247,7 +3251,7 @@ textarea {
 .vendor-request-details{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--border)}
 .vendor-request-details p{margin:0;overflow-wrap:anywhere}
 .success-message{padding:10px 12px;border:1px solid #a8d5b4;background:#f2fbf4;color:#246b36;border-radius:6px}
-@media(max-width:760px){.vendor-feature-grid{grid-template-columns:1fr}.vendor-form-modal{padding:18px}.vendor-table-card{padding:8px}}
+@media(max-width:760px){.vendor-feature-grid,.vendor-policy-field{grid-template-columns:1fr}.vendor-form-modal{padding:18px}.vendor-table-card{padding:8px}}
 
 /* 18. Merchant desktop compact-density pass */
 @media screen {
@@ -4159,9 +4163,13 @@ textarea {
 
   .license-online-card {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, 330px) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 12px;
     align-items: end;
+  }
+
+  .license-online-card .license-method-head {
+    grid-column: 1 / -1;
   }
 
   .license-method-head {

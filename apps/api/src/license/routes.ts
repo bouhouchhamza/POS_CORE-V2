@@ -1733,22 +1733,23 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      notes:z.string().max(1000).nullable().optional()
     }),
     plan_id:z.string().uuid(),
-    duration:z.enum(['1_month','3_months','6_months','1_year','custom']).default('1_year'),
-    custom_expires_at:z.string().datetime().nullable().optional()
+    duration:z.enum(['lifetime','1_month','3_months','6_months','1_year','custom']).default('1_year'),
+    custom_expires_at:z.string().datetime().nullable().optional(),
+    offline_validity_days:z.number().int().positive().nullable().optional()
    }).parse(request.body)
 
    const now=new Date()
-   let licenseExpiry=new Date(now)
+   let licenseExpiry:Date|null=input.duration==='lifetime'?null:new Date(now)
    if(input.duration==='custom'){
     if(!input.custom_expires_at)return reply.code(422).send({message:'Custom expiration is required.',code:'LICENSE_EXPIRY_REQUIRED'})
     licenseExpiry=new Date(input.custom_expires_at)
-   }else{
+   }else if(licenseExpiry){
     if(input.duration==='1_month')licenseExpiry.setUTCMonth(licenseExpiry.getUTCMonth()+1)
     if(input.duration==='3_months')licenseExpiry.setUTCMonth(licenseExpiry.getUTCMonth()+3)
     if(input.duration==='6_months')licenseExpiry.setUTCMonth(licenseExpiry.getUTCMonth()+6)
     if(input.duration==='1_year')licenseExpiry.setUTCFullYear(licenseExpiry.getUTCFullYear()+1)
    }
-   if(!Number.isFinite(licenseExpiry.getTime())||licenseExpiry.getTime()<=now.getTime())return reply.code(422).send({message:'License expiration must be in the future.',code:'LICENSE_EXPIRY_INVALID'})
+   if(licenseExpiry&&(!Number.isFinite(licenseExpiry.getTime())||licenseExpiry.getTime()<=now.getTime()))return reply.code(422).send({message:'License expiration must be in the future.',code:'LICENSE_EXPIRY_INVALID'})
 
    const client=await pool.connect()
    try{
@@ -1779,8 +1780,9 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       customer.id,business.id,plan.id,licenseKeyHash(licenseKey),business.business_type,
       JSON.stringify(planFeatures),Number(plan.default_device_limit??1),
       plan.default_desktop_device_limit??null,plan.default_web_device_limit??null,
-      plan.default_mobile_device_limit??null,licenseExpiry.toISOString(),
-      plan.offline_validity_days??null,'Created by simplified Vendor onboarding'
+      plan.default_mobile_device_limit??null,licenseExpiry?.toISOString()??null,
+      input.offline_validity_days===undefined?plan.offline_validity_days:input.offline_validity_days,
+      'Created by simplified Vendor onboarding'
      ]
     )).rows[0]
 
@@ -2255,8 +2257,8 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             notes:z.string().max(1000).nullable().optional()
         }).parse(request.body);
 
-        const requestedExpiry=input.expires_at?new Date(input.expires_at):(()=>{const value=new Date();value.setUTCFullYear(value.getUTCFullYear()+1);return value})()
-        if(!Number.isFinite(requestedExpiry.getTime())||requestedExpiry.getTime()<=Date.now())
+        const requestedExpiry=input.expires_at===null?null:input.expires_at?new Date(input.expires_at):(()=>{const value=new Date();value.setUTCFullYear(value.getUTCFullYear()+1);return value})()
+        if(requestedExpiry&&(!Number.isFinite(requestedExpiry.getTime())||requestedExpiry.getTime()<=Date.now()))
             return reply.code(422).send({message:'License expiration must be in the future.',code:'LICENSE_EXPIRY_INVALID'});
 
         const client=await pool.connect();
@@ -2339,7 +2341,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                     input.max_desktop_devices===undefined?plan.default_desktop_device_limit:input.max_desktop_devices,
                     input.max_web_devices===undefined?plan.default_web_device_limit:input.max_web_devices,
                     input.max_mobile_devices===undefined?plan.default_mobile_device_limit:input.max_mobile_devices,
-                    requestedExpiry.toISOString(),
+                    requestedExpiry?.toISOString()??null,
                     input.offline_validity_days===undefined?plan.offline_validity_days:input.offline_validity_days,
                     input.notes??null
                 ]
@@ -2461,7 +2463,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active') active_devices
         from licenses l join vendor_businesses vb on vb.id=l.vendor_business_id
         join license_customers c on c.id=l.customer_id
-        where l.status='active' and vb.status='active' and l.expires_at>now()
+        where l.status='active' and vb.status='active' and (l.expires_at is null or l.expires_at>now())
         and ($1::text is null or l.business_type=$1)
         and (l.max_desktop_devices is null or l.max_desktop_devices>0)
         and (
@@ -2617,10 +2619,11 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     app.post('/api/vendor/licenses/:id/renew', { preHandler: vendor }, async (request, reply) => {
         const licenseId = z.string().uuid().parse((request.params as any).id);
         const input = z.object({
-            expires_at: z.string().datetime().nullable().optional()
+            expires_at: z.string().datetime().nullable().optional(),
+            offline_validity_days: z.number().int().positive().nullable().optional()
         }).parse(request.body);
-        const renewalExpiry=input.expires_at?new Date(input.expires_at):(()=>{const value=new Date();value.setUTCFullYear(value.getUTCFullYear()+1);return value})()
-        if(!Number.isFinite(renewalExpiry.getTime())||renewalExpiry.getTime()<=Date.now())
+        const renewalExpiry=input.expires_at===null?null:input.expires_at?new Date(input.expires_at):(()=>{const value=new Date();value.setUTCFullYear(value.getUTCFullYear()+1);return value})()
+        if(renewalExpiry&&(!Number.isFinite(renewalExpiry.getTime())||renewalExpiry.getTime()<=Date.now()))
             return reply.code(422).send({message:'Renewal expiration must be in the future.',code:'LICENSE_EXPIRY_INVALID'});
         const client = await pool.connect();
         try {
@@ -2628,11 +2631,12 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             const license = (await client.query('select * from licenses where id=$1 for update', [licenseId])).rows[0];
             if (!license)
                 throw Object.assign(new Error('License not found.'), { statusCode: 404 });
-            const updated = (await client.query("update licenses set expires_at=$2,status='active',updated_at=now() where id=$1 returning *", [licenseId, renewalExpiry.toISOString()])).rows[0];
+            const offlineValidityDays=input.offline_validity_days===undefined?license.offline_validity_days:input.offline_validity_days;
+            const updated = (await client.query("update licenses set expires_at=$2,offline_validity_days=$3,status='active',updated_at=now() where id=$1 returning *", [licenseId, renewalExpiry?.toISOString()??null, offlineValidityDays])).rows[0];
             await client.query("update business_licenses set status='active',updated_at=now() where license_id=$1", [licenseId]);
             await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','license.renew','license',$1,$2)", [
                 licenseId,
-                'License renewed until ' + renewalExpiry.toISOString()
+                `License updated: expiration=${renewalExpiry?.toISOString()??'lifetime'}, offline=${offlineValidityDays??'permanent'}`
             ]);
             await client.query('commit');
             return { data: updated };
