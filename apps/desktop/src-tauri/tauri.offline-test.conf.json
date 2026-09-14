@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Bimik Cafe Test",
+  "productName": "CorePOS Test",
   "identifier": "bond.nextora.cafe.test",
   "build": {
     "beforeBuildCommand": "npm run build:desktop -w @bimik/web",
@@ -9,7 +9,7 @@
   "bundle": {
     "targets": ["nsis"],
     "externalBin": [
-      "binaries/bimik-local-api"
+      "binaries/corepos-local-api"
     ],
     "windows": {
       "webviewInstallMode": {

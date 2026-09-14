@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($LicenseServerUrl.TrimEnd('/') -ne 'https://pos.workflowtools.space') { throw 'Production installer must target https://pos.workflowtools.space.' }
 $desktopDir = Split-Path -Parent $PSScriptRoot
 $repo = (Resolve-Path (Join-Path $desktopDir "..\..")).Path
 if (-not $PublicKeyPath) {
@@ -32,6 +33,7 @@ const crypto=require('crypto');
 const pem=fs.readFileSync(process.argv[1],'utf8');
 if (/PRIVATE KEY/.test(pem)) throw new Error('PRIVATE KEY REFUSED');
 const key=crypto.createPublicKey(pem);
+if(key.asymmetricKeyType!=='ed25519') throw new Error('An Ed25519 verification key is required');
 const der=key.export({type:'spki',format:'der'});
 console.log('PUBLIC_KEY_PARSE=PASS');
 console.log('PUBLIC_KEY_SPKI_SHA256='+crypto.createHash('sha256').update(der).digest('hex'));

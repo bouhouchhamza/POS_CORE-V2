@@ -7,9 +7,9 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
   throw new Error('La prÃ©paration actuelle du sidecar cible uniquement Windows x64.')
 }
 const repository = path.resolve(import.meta.dirname, '..', '..', '..')
-const output = path.join(repository, 'apps', 'desktop', 'src-tauri', 'binaries', 'bimik-local-api-x86_64-pc-windows-msvc.exe')
+const output = path.join(repository, 'apps', 'desktop', 'src-tauri', 'binaries', 'corepos-local-api-x86_64-pc-windows-msvc.exe')
 const entry = path.join(repository, 'apps', 'api', 'dist', 'src', 'local', 'server.js')
-const bundledEntry = path.join(repository, 'apps', 'desktop', 'src-tauri', 'binaries', 'bimik-local-api.cjs')
+const bundledEntry = path.join(repository, 'apps', 'desktop', 'src-tauri', 'binaries', 'corepos-local-api.cjs')
 const npmCli = process.env.npm_execpath
 if (!npmCli) throw new Error('Ce script doit Ãªtre lancÃ© avec npm.')
 const build = spawnSync(process.execPath, [npmCli, 'run', 'build', '-w', '@bimik/api'], { cwd: repository, stdio: 'inherit' })

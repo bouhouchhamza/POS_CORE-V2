@@ -289,9 +289,9 @@ export default function LoginPage() {
     <main className="auth-page">
       <section className="login-card profile-login-card">
         <div className="login-brand">
-          <span className="brand-mark">BP</span>
+          <span className="brand-mark">CP</span>
           <div>
-            <strong>Bimik POS</strong>
+            <strong>CorePOS</strong>
             <small>{t('brand.subtitle')}</small>
           </div>
         </div>

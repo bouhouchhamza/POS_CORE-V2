@@ -22,11 +22,11 @@ export type AppSettings = {
 }
 
 export const defaultSettings: AppSettings = {
-  cafe_name: 'Bimik POS',
+  cafe_name: 'CorePOS',
   cafe_subtitle: 'Stock & caisse',
   cafe_address: 'HAY ADRAR',
   cafe_phone: '',
-  wifi_name: 'Bimik POS',
+  wifi_name: 'CorePOS',
   wifi_code: '',
   ticket_header: 'BIMIK POS',
   ticket_footer: 'NOUS VOUS REMERCIONS POUR VOTRE VISITE',

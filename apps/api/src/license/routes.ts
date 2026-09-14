@@ -4,8 +4,8 @@ import type pg from'pg'
 import argon2 from'argon2'
 import bcrypt from'bcryptjs'
 import{z}from'zod'
-import{businessSetupSchema}from'@bimik/validation'
-import{businessTypes,featureKeys}from'@bimik/shared-types'
+import{offlineRequestSchema,businessSetupSchema}from'@bimik/validation'
+import{offlineProofPayload,businessTypes,featureKeys}from'@bimik/shared-types'
 import{fingerprint,licenseKeyHash,signCertificate,type LicenseCertificate}from'./crypto.js'
 import{activationRequestIsFresh}from'./policy.js'
 import{config}from'../config.js'
@@ -55,16 +55,6 @@ const verifyOfflineDeviceProof=(publicKey:string,payload:string,signature:string
         return false;
     }
 };
-const offlineProofPayload=(input:any)=>[
-    'posreq-v1',
-    input.installation_id,
-    input.device_public_key,
-    input.device_name,
-    input.app_version,
-    input.business_type,
-    input.nonce,
-    input.requested_at
-].join('\n');
 const onlineDeviceProofPayload=(input:any)=>[
     'device-activate-v1',
     input.license_key.trim(),
@@ -2461,20 +2451,33 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     finally {
         client.release();
     } });
+    app.post('/api/vendor/offline-activations/candidates', {preHandler:vendor}, async(request,reply)=>{
+      const req=offlineRequestSchema.parse(request.body);
+      if(!activationRequestIsFresh(req.requested_at,offlineActivationWindowMs()))
+        return reply.code(422).send({message:'Offline request has expired.',code:'ACTIVATION_REQUEST_STALE'});
+      if(!verifyOfflineDeviceProof(req.device_public_key,offlineProofPayload(req),req.device_proof))
+        return reply.code(403).send({message:'Offline request proof is invalid.',code:'DEVICE_PROOF_INVALID'});
+      const rows=await pool.query(`select l.id,l.business_type,l.offline_validity_days,l.max_devices,l.max_desktop_devices,c.name customer_name,vb.name vendor_business_name,
+        (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active') active_devices
+        from licenses l join vendor_businesses vb on vb.id=l.vendor_business_id
+        join license_customers c on c.id=l.customer_id
+        where l.status='active' and vb.status='active' and l.expires_at>now()
+        and ($1::text is null or l.business_type=$1)
+        and (l.max_desktop_devices is null or l.max_desktop_devices>0)
+        and (
+          exists(select 1 from license_devices d where d.license_id=l.id and d.installation_id=$2 and d.device_fingerprint=$3 and d.channel='desktop' and d.status='active')
+          or (
+            not exists(select 1 from license_devices d where d.license_id=l.id and d.installation_id=$2)
+            and (select count(*) from license_devices d where d.license_id=l.id and d.status='active')<l.max_devices
+            and (l.max_desktop_devices is null or (select count(*) from license_devices d where d.license_id=l.id and d.status='active' and d.channel='desktop')<l.max_desktop_devices)
+          )
+        ) order by c.name,vb.name`,[req.version===1?req.business_type:null,req.installation_id,fingerprint(req.device_public_key)]);
+      return {data:rows.rows};
+    });
     app.post('/api/vendor/offline-activations/issue', { preHandler: vendor }, async (request, reply) => {
         const input = z.object({
             license_id: z.string().uuid(),
-            request: z.object({
-                version: z.literal(1),
-                installation_id: z.string().uuid(),
-                device_public_key: z.string().min(40).max(5000),
-                device_name: z.string().min(1).max(200),
-                app_version: z.string().min(1).max(100),
-                business_type: businessType,
-                nonce: z.string().min(16).max(200),
-                requested_at: z.string().datetime(),
-                device_proof: z.string().min(40).max(500)
-            })
+            request: offlineRequestSchema
         }).parse(request.body);
         const req = input.request;
         if (!activationRequestIsFresh(req.requested_at, offlineActivationWindowMs()))
@@ -2497,8 +2500,10 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 throw Object.assign(new Error('License is not active.'), { statusCode: 403, code: license.status === 'revoked' ? 'LICENSE_REVOKED' : 'LICENSE_INACTIVE' });
             if (license.expires_at && Date.parse(license.expires_at) <= Date.now())
                 throw Object.assign(new Error('License has expired.'), { statusCode: 403, code: 'LICENSE_EXPIRED' });
-            if (license.business_type !== req.business_type)
+            if (req.version === 1 && license.business_type !== req.business_type)
                 throw Object.assign(new Error('License is not compatible with the requested business type.'), { statusCode: 422, code: 'LICENSE_BUSINESS_TYPE_MISMATCH' });
+            if (license.max_desktop_devices === 0)
+                throw Object.assign(new Error('Desktop activation is not permitted by this license.'), { statusCode: 403, code: 'DESKTOP_CHANNEL_DISABLED' });
             const replay = (await client.query('select 1 from license_activations where license_id=$1 and request_nonce=$2 limit 1', [license.id, req.nonce])).rows[0];
             if (replay)
                 throw Object.assign(new Error('This offline activation request was already used.'), { statusCode: 409, code: 'ACTIVATION_REPLAY' });

@@ -3,15 +3,15 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance,FastifyReply,FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import {z} from 'zod';
-import { businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@bimik/validation';
+import { commercialCertificateSchema,offlineRequestSchema,businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@bimik/validation';
 import {fingerprint,verifyCertificate,type LicenseCertificate} from '../license/crypto.js';
+import {offlineProofPayload} from '@bimik/shared-types';
 import {businessTypeAllowed,certificateDeadline,certificateIsCurrent,certificateStatus} from '../license/policy.js';
+import {readLocalCertificate as storedCertificate} from '../license/local-certificate.js';
 
 const now=()=>new Date().toISOString(),hash=(v:string)=>crypto.createHash('sha256').update(v).digest('hex'),cents=(v:number)=>Math.round(v*100),amount=(v:unknown)=>Number(v??0)/100;
 const one=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).get(...args) as any;
 const all=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).all(...args) as any[];
-const storedCertificateSchema=z.object({version:z.literal(2),certificate_id:z.string().uuid(),license_id:z.string().uuid(),customer_id:z.string().uuid(),vendor_business_id:z.string().uuid(),business_id:z.number().int().positive().nullable(),business_type:z.string().min(1),plan:z.string().nullable(),features:z.array(z.string()),installation_id:z.string().uuid(),device_fingerprint:z.string().regex(/^[a-f0-9]{64}$/),issued_at:z.string().datetime(),expires_at:z.string().datetime().nullable(),offline_validity_days:z.number().int().positive().nullable()}).strict();
-const storedCertificate=(state:any):LicenseCertificate|null=>{if(!state?.certificate_json)return null;try{const parsed=storedCertificateSchema.safeParse(JSON.parse(state.certificate_json));return parsed.success?parsed.data:null}catch{return null}};
 export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,authenticate:(r:FastifyRequest,p:FastifyReply)=>Promise<unknown>){
   const user=(r:FastifyRequest)=>one(db,'select * from users where id=?',r.user.sub);
   const licenseState=()=>one(db,'select * from merchant_license_state where id=1');
@@ -38,13 +38,29 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
   };
   const storeCertificate=(certificate:LicenseCertificate,signature:string,status='active')=>{
     if(certificate.version!==2)return false;
+    const state=licenseState(),existing=storedCertificate(state);
+    if(existing){
+      if(existing.certificate_id===certificate.certificate_id&&['revoked','suspended','device_revoked'].includes(state.status))
+        throw Object.assign(new Error('A rejected certificate cannot be replayed to reactivate this device.'),{statusCode:409});
+      if(existing.installation_id!==certificate.installation_id||existing.device_fingerprint!==certificate.device_fingerprint||existing.vendor_business_id!==certificate.vendor_business_id||existing.business_type!==certificate.business_type)
+        throw Object.assign(new Error('Certificate cannot replace the existing device or business binding.'),{statusCode:409});
+      if(Date.parse(certificate.issued_at)<Date.parse(existing.issued_at))
+        throw Object.assign(new Error('An older certificate cannot replace the current certificate.'),{statusCode:409});
+    }
     const offlineValidUntil=certificate.offline_validity_days?new Date(Date.parse(certificate.issued_at)+certificate.offline_validity_days*86_400_000).toISOString():null;
+    return tx(()=>{
     db.prepare("update merchant_license_state set status=?,license_id=?,customer_id=?,vendor_business_id=?,business_type=?,allowed_features_json=?,certificate_id=?,certificate_version=?,certificate_json=?,certificate_signature=?,device_fingerprint=?,device_status='active',reason_code=null,expires_at=?,offline_valid_until=?,last_validated_at=?,updated_at=? where id=1").run(status,certificate.license_id,certificate.customer_id,certificate.vendor_business_id,certificate.business_type,JSON.stringify(certificate.features),certificate.certificate_id,certificate.version,JSON.stringify(certificate),signature,certificate.device_fingerprint,certificate.expires_at,offlineValidUntil,now(),now());
     db.prepare('update businesses set vendor_business_id=? where vendor_business_id is null').run(certificate.vendor_business_id);
+    const business=one(db,'select id from businesses order by id limit 1');
+    if(business){
+      db.prepare('delete from business_features where business_id=?').run(business.id);
+      for(const feature of certificate.features)db.prepare('insert into business_features(business_id,feature,created_at) values(?,?,?)').run(business.id,feature,now());
+    }
     return true;
+    });
   };
   const allowed:Record<string,string[]>={pos:['patron','owner','admin','manager','worker','cashier','seller','waiter'],suppliers:['patron','owner','admin','manager','stock_manager'],purchases:['patron','owner','admin','manager','stock_manager'],customers:['patron','owner','admin','manager','cashier','seller'],tables:['patron','owner','admin','manager','waiter'],qr_menu:['patron','owner','admin','manager','waiter'],kitchen:['patron','owner','admin','kitchen']};
-  const guard=(feature?:string)=>async(r:FastifyRequest,p:FastifyReply)=>{await authenticate(r,p);if(p.sent)return;const u=user(r);if(!u)return p.code(401).send({message:'Authentication required.'});if(feature&&!one(db,'select 1 ok from business_features where business_id=? and feature=?',u.business_id,feature))return p.code(403).send({message:`Feature '${feature}' is not enabled.`});if(feature&&allowed[feature]&&!allowed[feature].includes(u.role))return p.code(403).send({message:'Permission denied.'});if(feature&&!(process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production')){const state=licenseState();const certificate=storedCertificate(state);if(certificate&&!certificate.features.includes(feature))return p.code(403).send({message:"Ce module n'est pas inclus dans votre licence.",code:'LICENSE_ENTITLEMENT_REQUIRED'});if(!['GET','HEAD','OPTIONS'].includes(r.method)){const derived=certificate?certificateStatus(certificate):null,reason=derived&&derived!=='active'?derived:certificate?state?.status:state?.status==='active'?'activation_required':state?.status;if(reason!=='active')return p.code(403).send({message:'Licence inactive: les donnees restent consultables et exportables.',code:reason==='offline_validity_exceeded'?'OFFLINE_VALIDITY_EXCEEDED':reason==='expired'?'LICENSE_EXPIRED':reason==='device_revoked'?'DEVICE_REVOKED':reason==='vendor_business_inactive'?'VENDOR_BUSINESS_INACTIVE':reason==='revoked'?'LICENSE_REVOKED':'LICENSE_INACTIVE'})}}};
+  const guard=(feature?:string)=>async(r:FastifyRequest,p:FastifyReply)=>{await authenticate(r,p);if(p.sent)return;const u=user(r);if(!u)return p.code(401).send({message:'Authentication required.'});if(feature&&!one(db,'select 1 ok from business_features where business_id=? and feature=?',u.business_id,feature))return p.code(403).send({message:`Feature '${feature}' is not enabled.`});if(feature&&allowed[feature]&&!allowed[feature].includes(u.role))return p.code(403).send({message:'Permission denied.'});if(feature&&!(process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production')){const state=licenseState();const certificate=storedCertificate(state);if(certificate&&!certificate.features.some(entitled=>entitled===feature))return p.code(403).send({message:"Ce module n'est pas inclus dans votre licence.",code:'LICENSE_ENTITLEMENT_REQUIRED'});if(!['GET','HEAD','OPTIONS'].includes(r.method)){const derived=certificate?certificateStatus(certificate):null,reason=derived&&derived!=='active'?derived:certificate?state?.status:state?.status==='active'?'activation_required':state?.status;if(reason!=='active')return p.code(403).send({message:'Licence inactive: les donnees restent consultables et exportables.',code:reason==='offline_validity_exceeded'?'OFFLINE_VALIDITY_EXCEEDED':reason==='expired'?'LICENSE_EXPIRED':reason==='device_revoked'?'DEVICE_REVOKED':reason==='vendor_business_inactive'?'VENDOR_BUSINESS_INACTIVE':reason==='revoked'?'LICENSE_REVOKED':'LICENSE_INACTIVE'})}}};
   app.addHook('preHandler',async(r,p)=>{if(r.method!=='PUT'||r.url.split('?')[0]!=='/api/business/current/features'||process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production')return;await authenticate(r,p);if(p.sent)return;const state=licenseState();const certificate=storedCertificate(state),denied=businessFeaturesSchema.parse(r.body).enabled_features.filter(feature=>!certificate?.features.includes(feature));if(denied.length)return p.code(403).send({message:"Ce module n'est pas inclus dans votre licence.",code:'LICENSE_ENTITLEMENT_REQUIRED',features:denied})});
   const tx=<T>(fn:()=>T)=>{db.exec('BEGIN IMMEDIATE');try{const value=fn();db.exec('COMMIT');return value}catch(e){db.exec('ROLLBACK');throw e}};
   app.get('/api/setup/status',async()=>{const business=one(db,'select id,name,slug,logo,business_type from businesses order by id limit 1'),state=licenseState();return {data:{configured:Boolean(business),requires_license_activation:state?.status!=='active',business:business??null}}});
@@ -146,7 +162,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
   }
 
   app.get('/api/business/current',{preHandler:guard()},async r=>{const u=user(r),b=one(db,'select * from businesses where id=?',u.business_id);return {data:{...b,enabled_features:all(db,'select feature from business_features where business_id=? order by feature',u.business_id).map(x=>x.feature),branch:one(db,'select id,name,code from branches where id=?',u.branch_id)}}});
-  app.put('/api/business/current',{preHandler:guard()},async(r,p)=>{const u=user(r);if(!['patron','owner','admin'].includes(u.role))return p.code(403).send({message:'Permission denied.'});const v=businessUpdateSchema.parse(r.body),b=one(db,'select * from businesses where id=?',u.business_id);db.prepare('update businesses set name=?,business_type=?,currency=?,locale=?,timezone=?,updated_at=? where id=?').run(v.name??b.name,v.business_type??b.business_type,v.currency??b.currency,v.locale??b.locale,v.timezone??b.timezone,now(),u.business_id);return {data:{...one(db,'select * from businesses where id=?',u.business_id),enabled_features:all(db,'select feature from business_features where business_id=?',u.business_id).map(x=>x.feature),branch:one(db,'select id,name,code from branches where id=?',u.branch_id)}}});
+  app.put('/api/business/current',{preHandler:guard()},async(r,p)=>{const u=user(r);if(!['patron','owner','admin'].includes(u.role))return p.code(403).send({message:'Permission denied.'});const v=businessUpdateSchema.parse(r.body),b=one(db,'select * from businesses where id=?',u.business_id);if(v.business_type&&v.business_type!==b.business_type)return p.code(409).send({message:'Business type is bound by commercial activation.'});db.prepare('update businesses set name=?,business_type=?,currency=?,locale=?,timezone=?,updated_at=? where id=?').run(v.name??b.name,v.business_type??b.business_type,v.currency??b.currency,v.locale??b.locale,v.timezone??b.timezone,now(),u.business_id);return {data:{...one(db,'select * from businesses where id=?',u.business_id),enabled_features:all(db,'select feature from business_features where business_id=?',u.business_id).map(x=>x.feature),branch:one(db,'select id,name,code from branches where id=?',u.branch_id)}}});
   app.put('/api/business/current/features',{preHandler:guard()},async(r,p)=>{const u=user(r);if(!['patron','owner','admin'].includes(u.role))return p.code(403).send({message:'Permission denied.'});const input=businessFeaturesSchema.parse(r.body),disabled=(f:string)=>!input.enabled_features.includes(f as any);if(disabled('tables')&&one(db,"select 1 ok from orders where business_id=? and table_id is not null and status not in('completed','cancelled') limit 1",u.business_id))return p.code(409).send({message:'Close active table orders before disabling tables.'});if(disabled('purchases')&&one(db,"select 1 ok from purchases where business_id=? and status not in('received','cancelled') limit 1",u.business_id))return p.code(409).send({message:'Complete active purchases before disabling purchases.'});tx(()=>{db.prepare('delete from business_features where business_id=?').run(u.business_id);for(const f of input.enabled_features)db.prepare('insert into business_features values(?,?,?)').run(u.business_id,f,now())});return {data:{...one(db,'select * from businesses where id=?',u.business_id),enabled_features:input.enabled_features,branch:one(db,'select id,name,code from branches where id=?',u.branch_id)}}});
   app.get('/api/orders',{preHandler:guard('pos')},async r=>{const u=user(r);return {data:all(db,'select id from orders where business_id=? order by created_at desc limit 250',u.business_id).map(o=>orderDto(o.id,u.business_id))}});
   app.post('/api/orders',{preHandler:guard('pos')},async(r,p)=>p.code(201).send({data:createOrder(orderSchema.parse(r.body),user(r))}));
@@ -204,25 +220,6 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
       return false;
     }
   };
-
-  const offlineProofPayload=(input:{
-    installation_id:string;
-    device_public_key:string;
-    device_name:string;
-    app_version:string;
-    business_type:string;
-    nonce:string;
-    requested_at:string;
-  })=>[
-    'posreq-v1',
-    input.installation_id,
-    input.device_public_key,
-    input.device_name,
-    input.app_version,
-    input.business_type,
-    input.nonce,
-    input.requested_at
-  ].join('\n');
 
   const importProofPayload=(certificateId:string,installationId:string)=>
     ['poslic-import-v1',certificateId,installationId].join('\n');
@@ -316,7 +313,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
     const signed=body?.data??body;
 
     const parsed=z.object({
-      certificate:z.any(),
+      certificate:commercialCertificateSchema,
       signature:z.string().min(40)
     }).safeParse(signed);
 
@@ -326,7 +323,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
       });
 
     const certificate=
-      parsed.data.certificate as LicenseCertificate;
+      parsed.data.certificate;
 
     const publicKey=
       process.env.LICENSE_SIGNING_PUBLIC_KEY
@@ -402,31 +399,23 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
       if(body?.code&&terminal[body.code])db.prepare("update merchant_license_state set status=?,device_status=?,reason_code=?,updated_at=? where id=1").run(terminal[body.code],body.code==='DEVICE_REVOKED'?'revoked':state.device_status,body.code,now());
       return p.code(response.status).send({message:body?.message||'Online license validation failed.',code:body?.code});
     }
-    const signed=body?.data??body,certificate=signed?.certificate as LicenseCertificate,signature=signed?.signature;
+    const signed=body?.data??body,certificate=commercialCertificateSchema.safeParse(signed?.certificate).data,signature=signed?.signature;
     const publicKey=process.env.LICENSE_SIGNING_PUBLIC_KEY?.replaceAll('\\n','\n');
     if(!certificate||certificate.version!==2||typeof signature!=='string'||!publicKey||!verifyCertificate(certificate,signature,publicKey))return p.code(502).send({message:'License server returned an invalid certificate.',code:'LICENSE_SIGNATURE_INVALID'});
     if(certificate.installation_id!==input.installation_id||certificate.device_fingerprint!==fingerprint(input.device_public_key))return p.code(403).send({message:'Device identity mismatch.',code:'DEVICE_IDENTITY_MISMATCH'});
     if(!certificateIsCurrent(certificate))return p.code(422).send({message:'License has expired.',code:certificateStatus(certificate)==='offline_validity_exceeded'?'OFFLINE_VALIDITY_EXCEEDED':'LICENSE_EXPIRED'});
+    if(certificate.license_id!==cached.license_id||certificate.vendor_business_id!==cached.vendor_business_id||certificate.business_type!==cached.business_type)return p.code(409).send({message:'Revalidation cannot change commercial identity.'});
     storeCertificate(certificate,signature);
     return{data:{status:'active',certificate}};
   });
   app.post('/api/license/offline-request',{preHandler:activationAdmin},async(r,p)=>{
 
-    const input=z.object({
-      installation_id:z.string().uuid(),
-      device_public_key:z.string().min(40).max(5000),
-      device_name:z.string().min(1).max(200),
-      app_version:z.string().min(1).max(100),
-      business_type:z.enum(['cafe','restaurant','library','grocery','drugstore','retail','custom']),
-      nonce:z.string().min(16).max(200),
-      requested_at:z.string().datetime(),
-      device_proof:z.string().min(40).max(500)
-    }).parse(r.body);
-
+    // Old clients omitted the v1 discriminator; only that exact legacy shape is accepted.
+    const body=z.record(z.string(),z.unknown()).parse(r.body);
+    const input=offlineRequestSchema.parse(body.version===undefined?{...body,version:1}:body);
     const proofPayload=offlineProofPayload(input);
-
     const configuredBusiness=one(db,'select business_type from businesses order by id limit 1');
-    if(configuredBusiness&&configuredBusiness.business_type!==input.business_type)
+    if(input.version===1&&configuredBusiness&&configuredBusiness.business_type!==input.business_type)
       return p.code(422).send({message:'Activation request business type mismatch.'});
 
     if(!verifyDeviceProof(
@@ -440,32 +429,20 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
       });
     }
 
-    return{
-      data:{
-        version:1,
-        installation_id:input.installation_id,
-        device_public_key:input.device_public_key,
-        device_name:input.device_name,
-        app_version:input.app_version,
-        business_type:input.business_type,
-        nonce:input.nonce,
-        requested_at:input.requested_at,
-        device_proof:input.device_proof
-      }
-    };
+    return {data:input};
   });
 
   app.post('/api/license/import',{preHandler:activationAdmin},async(r,p)=>{
 
     const input=z.object({
-      certificate:z.any(),
+      certificate:commercialCertificateSchema,
       signature:z.string().min(40),
       installation_id:z.string().uuid(),
       device_public_key:z.string().min(40).max(5000),
       device_proof:z.string().min(40).max(500)
     }).parse(r.body);
 
-    const certificate=input.certificate as LicenseCertificate;
+    const certificate=input.certificate;
 
     if(!certificate?.certificate_id)
       return p.code(422).send({message:'License certificate is invalid.'});
@@ -515,7 +492,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
   app.get('/api/sync/outbox',{preHandler:guard()},async r=>({data:all(db,"select * from sync_mutations where business_id=? and sync_status in('pending','failed') order by id limit 100",user(r).business_id).map(x=>({...x,payload:JSON.parse(x.payload_json)}))}));
   app.post('/api/sync/outbox/:clientId/ack',{preHandler:guard()},async r=>{const u=user(r);db.prepare("update sync_mutations set sync_status='synced',last_error=null,updated_at=? where business_id=? and client_id=?").run(now(),u.business_id,(r.params as any).clientId);return {message:'Acknowledged.'}});
   app.post('/api/sync/outbox/:clientId/retry',{preHandler:guard()},async r=>{const u=user(r);db.prepare("update sync_mutations set sync_status='pending',last_error=null,updated_at=? where business_id=? and client_id=?").run(now(),u.business_id,(r.params as any).clientId);return {message:'Queued.'}});
-  const table=(slug:string,token:string,requiredFeatures=['qr_menu'])=>{const result=one(db,"select t.*,b.name business_name,b.slug,b.currency,b.vendor_business_id,r.name room_name from restaurant_tables t join businesses b on b.id=t.business_id join rooms r on r.id=t.room_id join business_features f on f.business_id=b.id and f.feature='qr_menu' where b.slug=? and (t.qr_public_token=? or t.qr_token_hash=?) and t.active=1",slug,token,hash(token));if(!result||process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production')return result;const state=licenseState(),certificate=storedCertificate(state);if(state?.status!=='active'||!certificate||!result.vendor_business_id||result.vendor_business_id!==state.vendor_business_id)return null;return certificateIsCurrent(certificate)&&requiredFeatures.every(feature=>certificate.features.includes(feature))?result:null};
+  const table=(slug:string,token:string,requiredFeatures=['qr_menu'])=>{const result=one(db,"select t.*,b.name business_name,b.slug,b.currency,b.vendor_business_id,r.name room_name from restaurant_tables t join businesses b on b.id=t.business_id join rooms r on r.id=t.room_id join business_features f on f.business_id=b.id and f.feature='qr_menu' where b.slug=? and (t.qr_public_token=? or t.qr_token_hash=?) and t.active=1",slug,token,hash(token));if(!result||process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production')return result;const state=licenseState(),certificate=storedCertificate(state);if(state?.status!=='active'||!certificate||!result.vendor_business_id||result.vendor_business_id!==state.vendor_business_id)return null;return certificateIsCurrent(certificate)&&requiredFeatures.every(feature=>certificate.features.some(entitled=>entitled===feature))?result:null};
   app.get('/api/public/menu/:slug/table/:token',async(r,p)=>{const q=r.params as any,t=table(q.slug,q.token);if(!t)return p.code(404).send({message:'Menu not found.'});return {data:{business:{name:t.business_name,slug:t.slug,currency:t.currency},table:{id:t.id,name:t.name,number:t.table_number,room:t.room_name},categories:all(db,'select * from categories where business_id=? and is_public=1 order by name',t.business_id),products:all(db,'select id,category_id,name,sale_price_cents,image,available from products where business_id=? and is_public=1 and is_active=1 and available=1 order by name',t.business_id).map(x=>({...x,sale_price:amount(x.sale_price_cents),variants:all(db,'select id,name,price_delta_cents from product_variants where business_id=? and product_id=? and active=1 order by id',t.business_id,x.id).map(v=>({...v,price:amount(v.price_delta_cents)})),modifiers:all(db,'select id,name,price_cents from product_modifiers where business_id=? and product_id=? and active=1 order by id',t.business_id,x.id).map(m=>({...m,price:amount(m.price_cents)}))}))}}});
   app.post('/api/public/menu/:slug/table/:token/orders',async(r,p)=>{const q=r.params as any,t=table(q.slug,q.token,['qr_menu','pos']);if(!t)return p.code(404).send({message:'Menu not found.'});const input=orderSchema.parse({...r.body as object,source:'qr_table',type:'dine_in',table_id:t.id});return p.code(201).send({data:createOrder(input,null,t)})});
   app.post('/api/public/menu/:slug/table/:token/events',async(r,p)=>{const q=r.params as any,t=table(q.slug,q.token),type=(r.body as any)?.type;if(!t)return p.code(404).send({message:'Menu not found.'});if(!['call_waiter','request_bill'].includes(type))return p.code(422).send({message:'Invalid event.'});db.prepare('insert into table_events(business_id,table_id,type,status,created_at) values(?,?,?,\'pending\',?)').run(t.business_id,t.id,type,now());if(type==='request_bill')db.prepare("update restaurant_tables set status='bill_requested',updated_at=? where id=?").run(now(),t.id);return p.code(202).send({message:'Request received.'})});

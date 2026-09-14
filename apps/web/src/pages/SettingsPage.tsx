@@ -453,7 +453,7 @@ export default function SettingsPage() {
               <form className="settings-form" onSubmit={handleSubmit}>
               <section className="settings-card">
                 <div className="settings-card-head">
-                  <span className="settings-icon">BP</span>
+                  <span className="settings-icon">CP</span>
                   <div>
                     <h3>{t('settings.cafe')}</h3>
                     <p>{t('settings.cafeHelp')}</p>

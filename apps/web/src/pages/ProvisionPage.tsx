@@ -150,9 +150,9 @@ export default function ProvisionPage(){
     <section className="setup-shell">
       <header className="setup-header">
         <div className="product-lockup">
-          <span className="brand-mark">BP</span>
+          <span className="brand-mark">CP</span>
           <div>
-            <strong>Bimik POS</strong>
+            <strong>CorePOS</strong>
             <small>{t('provision.brand')}</small>
           </div>
         </div>

@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 10;
+export const LOCAL_SCHEMA_VERSION = 11;
 
 export const localMigrations = [{
   version: 1,
@@ -266,6 +266,39 @@ export const localMigrations = [{
         )
       WHERE id=NEW.id;
     END;
+  `,
+}, {
+  version:11,
+  name:'unconfigured_empty_business_identity',
+  sql:`
+    -- Only discard an empty, unbound historical placeholder. Any customer row,
+    -- configuration, certificate or operational record preserves the identity.
+    CREATE TEMP TABLE empty_placeholder AS SELECT id FROM businesses
+    WHERE vendor_business_id IS NULL AND business_type='cafe'
+      AND name IN ('Bimik Cafe','Bimik POS') AND slug='bimik-cafe'
+      AND (SELECT count(*) FROM businesses)=1
+      AND NOT EXISTS(SELECT 1 FROM merchant_license_state WHERE certificate_json IS NOT NULL OR license_id IS NOT NULL)
+      AND NOT EXISTS(SELECT 1 FROM users)
+      AND NOT EXISTS(SELECT 1 FROM categories)
+      AND NOT EXISTS(SELECT 1 FROM products)
+      AND NOT EXISTS(SELECT 1 FROM customers)
+      AND NOT EXISTS(SELECT 1 FROM suppliers)
+      AND NOT EXISTS(SELECT 1 FROM orders)
+      AND NOT EXISTS(SELECT 1 FROM sales)
+      AND NOT EXISTS(SELECT 1 FROM purchases)
+      AND NOT EXISTS(SELECT 1 FROM settings)
+      AND NOT EXISTS(SELECT 1 FROM stock_movements)
+      AND NOT EXISTS(SELECT 1 FROM cash_register_sessions)
+      AND NOT EXISTS(SELECT 1 FROM rooms)
+      AND NOT EXISTS(SELECT 1 FROM sync_mutations)
+      AND NOT EXISTS(SELECT 1 FROM audit_logs)
+      AND NOT EXISTS(SELECT 1 FROM inventory_counts);
+    DELETE FROM business_features WHERE business_id IN (SELECT id FROM empty_placeholder);
+    DELETE FROM branches WHERE business_id IN (SELECT id FROM empty_placeholder);
+    DELETE FROM businesses WHERE id IN (SELECT id FROM empty_placeholder);
+    UPDATE merchant_license_state SET status='activation_required',business_type=NULL,allowed_features_json='[]',reason_code=NULL
+      WHERE EXISTS(SELECT 1 FROM empty_placeholder);
+    DROP TABLE empty_placeholder;
   `,
 }];
 

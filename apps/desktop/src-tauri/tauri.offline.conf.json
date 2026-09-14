@@ -8,7 +8,7 @@
   },
   "bundle": {
     "externalBin": [
-      "binaries/bimik-local-api"
+      "binaries/corepos-local-api"
     ],
     "windows": {
       "webviewInstallMode": {

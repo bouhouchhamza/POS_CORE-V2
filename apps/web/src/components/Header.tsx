@@ -110,7 +110,7 @@ export default function Header({
       ) : null}
 
       <div className="header-title">
-        <p className="header-kicker">Bimik POS</p>
+        <p className="header-kicker">CorePOS</p>
         <h1>{user?.business?.name ?? t('brand.subtitle')}</h1>
       </div>
 

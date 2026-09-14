@@ -2,6 +2,15 @@ export const featureKeys = ['pos','inventory','barcode','suppliers','purchases',
 export type FeatureKey = typeof featureKeys[number];
 export const businessTypes = ['cafe','restaurant','library','grocery','drugstore','retail','custom'] as const;
 export type BusinessType = typeof businessTypes[number];
+export type OfflineDeviceFacts = { installation_id:string; device_public_key:string; device_name:string; app_version:string; nonce:string; requested_at:string };
+export type OfflineRequest = OfflineDeviceFacts & {device_proof:string} & ({version:1;business_type:BusinessType}|{version:2;platform:string});
+/** v1 is frozen for deployed clients; v2 signs a JSON array of device facts only. */
+export function offlineProofPayload(input: OfflineDeviceFacts & ({version:1;business_type:BusinessType}|{version:2;platform:string})):string {
+  const facts=[input.installation_id,input.device_public_key,input.device_name,input.app_version];
+  return input.version===1
+    ? ['posreq-v1',...facts,input.business_type,input.nonce,input.requested_at].join('\n')
+    : JSON.stringify(['posreq-v2',...facts,input.platform,input.nonce,input.requested_at]);
+}
 export const roleKeys = ['patron','worker','owner','admin','manager','cashier','seller','waiter','kitchen','stock_manager'] as const;
 export type Role = typeof roleKeys[number];
 export type Permission = 'business.manage'|'users.manage'|'products.read'|'products.write'|'pos.use'|'cash.manage'|'orders.read'|'orders.write'|'tables.manage'|'kitchen.use'|'inventory.read'|'inventory.write'|'purchases.manage'|'suppliers.manage'|'customers.manage'|'reports.read';

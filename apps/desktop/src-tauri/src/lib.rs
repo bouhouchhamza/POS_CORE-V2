@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod product_images_generated;
 #[derive(Debug, thiserror::Error)]
 enum PrintError {
@@ -96,6 +97,7 @@ use tauri_plugin_shell::{process::CommandChild, ShellExt};
 
 struct LocalBackend(Mutex<Option<CommandChild>>);
 
+#[cfg(test)]
 const SEED_DB: &[u8] = include_bytes!("../resources/bimik-cafe.seed.sqlite");
 
 fn startup_log(data_directory: &std::path::Path, message: &str) {
@@ -112,12 +114,14 @@ fn startup_log(data_directory: &std::path::Path, message: &str) {
     }
 }
 
+#[cfg(test)]
 fn sqlite_companion_path(database: &std::path::Path, suffix: &str) -> std::path::PathBuf {
     let mut value = database.as_os_str().to_os_string();
     value.push(suffix);
     std::path::PathBuf::from(value)
 }
 
+#[cfg(test)]
 fn legacy_database_is_truly_empty(database: &std::path::Path) -> bool {
     use rusqlite::{Connection, OpenFlags};
 
@@ -181,7 +185,7 @@ fn legacy_database_is_truly_empty(database: &std::path::Path) -> bool {
 
     // Unknown/unrelated/too-partial DB: preserve it.
     if !has_users || fingerprint_count < 2 {
-        println!("Bimik Cafe: unrecognized database preserved");
+        println!("CorePOS: unrecognized database preserved");
         return false;
     }
 
@@ -194,7 +198,7 @@ fn legacy_database_is_truly_empty(database: &std::path::Path) -> bool {
             && table != "backup_status"
             && table != "menu_import_sessions"
         {
-            println!("Bimik Cafe: unknown table {table}; database preserved");
+            println!("CorePOS: unknown table {table}; database preserved");
             return false;
         }
     }
@@ -218,7 +222,7 @@ fn legacy_database_is_truly_empty(database: &std::path::Path) -> bool {
 
         if count != 0 {
             println!(
-                "Bimik Cafe: existing business data found in {}; database preserved",
+                "CorePOS: existing business data found in {}; database preserved",
                 table
             );
 
@@ -226,11 +230,12 @@ fn legacy_database_is_truly_empty(database: &std::path::Path) -> bool {
         }
     }
 
-    println!("Bimik Cafe: recognized empty legacy database eligible for seed repair");
+    println!("CorePOS: recognized empty legacy database eligible for seed repair");
 
     true
 }
 
+#[cfg(test)]
 fn restore_legacy_backup(database: &std::path::Path, backup: &std::path::Path) {
     let _ = std::fs::remove_file(database);
     let _ = std::fs::rename(backup, database);
@@ -246,6 +251,7 @@ fn restore_legacy_backup(database: &std::path::Path, backup: &std::path::Path) {
     }
 }
 
+#[cfg(test)]
 fn validate_seed_database(database: &std::path::Path) -> Result<(), std::io::Error> {
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
     let connection =
@@ -280,6 +286,7 @@ fn validate_seed_database(database: &std::path::Path) -> Result<(), std::io::Err
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq, Eq)]
 struct CatalogMigrationResult {
     categories_inserted: usize,
@@ -289,6 +296,7 @@ struct CatalogMigrationResult {
 /// Adds catalog rows introduced by a newer bundled release without changing any
 /// row that already exists in the client's database. Stable approved IDs are the
 /// only identity used here; existing mutable fields remain business-owned.
+#[cfg(test)]
 fn migrate_missing_approved_catalog(
     data_directory: &std::path::Path,
     database: &std::path::Path,
@@ -457,6 +465,7 @@ fn migrate_missing_approved_catalog(
     }
 }
 
+#[cfg(test)]
 fn provision_product_images(
     data_directory: &std::path::Path,
     database: &std::path::Path,
@@ -585,6 +594,7 @@ fn provision_product_images(
     Ok((copied, linked, preserved))
 }
 
+#[cfg(test)]
 fn ensure_seed_database(data_directory: &std::path::Path) -> Result<bool, std::io::Error> {
     let data_dir = data_directory.join("data");
     std::fs::create_dir_all(&data_dir)?;
@@ -594,11 +604,11 @@ fn ensure_seed_database(data_directory: &std::path::Path) -> Result<bool, std::i
     let replacing_legacy_empty = if database.exists() {
         if legacy_database_is_truly_empty(&database) {
             println!(
-                "Bimik Cafe: unused legacy database detected; preparing automatic seed repair"
+                "CorePOS: unused legacy database detected; preparing automatic seed repair"
             );
             true
         } else {
-            println!("Bimik Cafe: existing database preserved");
+            println!("CorePOS: existing database preserved");
             return Ok(false);
         }
     } else {
@@ -630,7 +640,7 @@ fn ensure_seed_database(data_directory: &std::path::Path) -> Result<bool, std::i
             return Err(error);
         }
 
-        println!("Bimik Cafe: first-run seed database installed");
+        println!("CorePOS: first-run seed database installed");
 
         return Ok(true);
     }
@@ -680,7 +690,7 @@ fn ensure_seed_database(data_directory: &std::path::Path) -> Result<bool, std::i
         return Err(error);
     }
 
-    println!("Bimik Cafe: unused legacy database repaired automatically from embedded seed");
+    println!("CorePOS: unused legacy database repaired automatically from embedded seed");
 
     Ok(true)
 }
@@ -1286,7 +1296,7 @@ mod windows_print {
             let printer_name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
             let mut handle = Default::default();
             OpenPrinterW(PCWSTR(printer_name.as_ptr()), &mut handle, None)?;
-            let document_name: Vec<u16> = "Bimik Cafe receipt\0".encode_utf16().collect();
+            let document_name: Vec<u16> = "CorePOS receipt\0".encode_utf16().collect();
             let data_type: Vec<u16> = "RAW\0".encode_utf16().collect();
             let document = DOC_INFO_1W {
                 pDocName: PWSTR(document_name.as_ptr() as *mut _),
@@ -1364,69 +1374,24 @@ pub fn run() {
             let data_directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_directory)?;
             let database = data_directory.join("data").join("bimik-cafe.sqlite");
-            let existed_before = database.exists();
-            println!("Bimik Cafe: Tauri app_data_dir={}", data_directory.display());
-            println!("Bimik Cafe: intended SQLite={}", database.display());
-            startup_log(&data_directory, &format!("app_data_dir={}", data_directory.display()));
-            startup_log(&data_directory, &format!("intended_sqlite={}", database.display()));
-            let changed = ensure_seed_database(&data_directory)?;
-            if !database.is_file() {
-                return Err(format!("La base SQLite attendue n'existe pas après le provisioning : {}", database.display()).into());
-            }
-            let provisioning = match (existed_before, changed) {
-                (false, true) => "installed",
-                (true, true) => "repaired-with-backup",
-                _ => "preserved",
-            };
-            println!("Bimik Cafe: database provisioning={provisioning}");
-            println!("Bimik Cafe: passing SQLite path to sidecar={}", database.display());
-            startup_log(&data_directory, &format!("database_provisioning={provisioning}"));
-            startup_log(&data_directory, &format!("sidecar_sqlite={}", database.display()));
-            let catalog = migrate_missing_approved_catalog(&data_directory, &database)
-                .map_err(|error| format!("La mise à jour sûre du catalogue a échoué: {error}"))?;
-            let catalog_message = format!(
-                "catalog_migration categories_inserted={} products_inserted={}",
-                catalog.categories_inserted, catalog.products_inserted
-            );
-            println!("Bimik Cafe: {catalog_message}");
-            startup_log(&data_directory, &catalog_message);
-            match provision_product_images(
-                &data_directory,
-                &database,
-            ) {
-                Ok((copied, linked, preserved)) => {
-                    let message = format!(
-                        "product_images copied={copied} linked={linked} custom_preserved={preserved}"
-                    );
-                    println!("Bimik Cafe: {message}");
-                    startup_log(
-                        &data_directory,
-                        &message,
-                    );
-                }
-                Err(error) => {
-                    // Images must never prevent the POS
-                    // from starting or endanger business data.
-                    eprintln!(
-                        "Bimik Cafe: product image provisioning failed: {error}"
-                    );
-                    startup_log(
-                        &data_directory,
-                        &format!(
-                            "product_images_error={error}"
-                        ),
-                    );
-                }
-            }
-
+            // SQLite schema creation belongs to the API. A universal installation
+            // never installs the historical café users/catalog or a commercial type.
+            std::fs::create_dir_all(data_directory.join("data"))?;
+            startup_log(&data_directory, if database.exists() {
+                "database_provisioning=preserved"
+            } else {
+                "database_provisioning=unconfigured"
+            });
 
             let mut sidecar = app
                 .shell()
-                .sidecar("bimik-local-api")?
+                .sidecar("corepos-local-api")?
                 .env("BIMIK_APP_DATA_DIR", &data_directory)
                 .env("BIMIK_DATABASE_PATH", &database)
                 .env("BIMIK_LOCAL_PORT", "32145")
-                .env("BIMIK_SIDECAR", "1");
+                .env("BIMIK_SIDECAR", "1")
+                .env("NODE_ENV", "production")
+                .env("LICENSE_MODE", "commercial");
 
             let license_server_url = std::env::var("LICENSE_SERVER_URL")
                 .ok()
@@ -1455,7 +1420,7 @@ pub fn run() {
             if !wait_for_local_api(Duration::from_secs(15)) {
                 let _ = child.kill();
                 startup_log(&data_directory, "sidecar_ready=false");
-                return Err("Le service local Bimik Cafe n'a pas démarré. Aucune donnée n'a été modifiée.".into());
+                return Err("Le service local CorePOS n'a pas démarré. Aucune donnée n'a été modifiée.".into());
             }
             startup_log(&data_directory, "sidecar_ready=true");
             app.manage(LocalBackend(Mutex::new(Some(child))));
@@ -1473,7 +1438,7 @@ pub fn run() {
             sign_license_device_payload
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Bimik Cafe");
+        .expect("error while building CorePOS");
     application.run(|app, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
             if let Some(state) = app.try_state::<LocalBackend>() {
