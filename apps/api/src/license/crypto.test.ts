@@ -16,6 +16,8 @@ test('certificate signature and device binding reject copied or tampered data',(
   assert.equal(certificateMatchesDevice(certificate,crypto.randomUUID(),publicA),false)
   assert.equal(certificateMatchesDevice(certificate,certificate.installation_id,publicB),false)
   assert.equal(verifyCertificate({...certificate,features:['pos']},signature,verifyKey),false)
+  assert.equal(verifyCertificate({...certificate,expires_at:'2027-12-31T23:59:59.000Z'},signature,verifyKey),false)
+  assert.equal(verifyCertificate({...certificate,offline_validity_days:null},signature,verifyKey),false)
   const tamperedBytes=Buffer.from(signature,'base64url')
   tamperedBytes[0]^=1
   const tampered=tamperedBytes.toString('base64url')

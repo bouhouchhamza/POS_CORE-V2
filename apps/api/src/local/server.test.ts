@@ -271,7 +271,18 @@ test("offline certificate import rejects copied identity, tampering, and expiry"
     assert.equal((await app.inject({method:"POST",url:"/api/license/import",payload:signed})).statusCode,422);
     const expired={...certificate,certificate_id:crypto.randomUUID(),expires_at:new Date(Date.now()-1000).toISOString()};
     assert.equal((await app.inject({method:"POST",url:"/api/license/import",payload:payload(expired)})).statusCode,422);
-    assert.equal((await app.inject({method:"POST",url:"/api/license/import",payload:payload(certificate)})).statusCode,200);
+    const unchanged = db.prepare("SELECT status,certificate_json,license_id FROM merchant_license_state WHERE id=1").get() as {status?:string;certificate_json?:string|null;license_id?:string|null};
+    assert.equal(unchanged?.status,'activation_required');
+    assert.equal(unchanged?.certificate_json,null);
+    assert.equal(unchanged?.license_id,null);
+    const imported=await app.inject({method:"POST",url:"/api/license/import",payload:payload(certificate)});
+    assert.equal(imported.statusCode,200,imported.body);
+    assert.equal(imported.json().data.certificate.business_type,'retail');
+    assert.deepEqual(imported.json().data.certificate.features,['pos']);
+    const current=(await app.inject({method:'GET',url:'/api/license/status'})).json().data;
+    assert.equal(current.status,'active');
+    assert.equal(current.business_type,'retail');
+    assert.deepEqual(current.features,['pos']);
   } finally { if(previous===undefined)delete process.env.LICENSE_SIGNING_PUBLIC_KEY;else process.env.LICENSE_SIGNING_PUBLIC_KEY=previous; await app.close();db.close();fs.rmSync(root,{recursive:true,force:true}); }
 });
 
@@ -296,6 +307,8 @@ test("offline activation persists across a complete local API restart", { concur
     assert.equal(status.statusCode,200,status.body);
     assert.equal(status.json().data.status,"active");
     assert.equal(status.json().data.certificate.certificate_id,certificate.certificate_id);
+    assert.equal(status.json().data.business_type,"retail");
+    assert.deepEqual(status.json().data.features,["pos"]);
   } finally {
     if(previous===undefined)delete process.env.LICENSE_SIGNING_PUBLIC_KEY;else process.env.LICENSE_SIGNING_PUBLIC_KEY=previous;
     await app.close();
@@ -325,10 +338,11 @@ test("permanent offline certificate keeps operational writes active without a va
     certificate.expires_at = null;
     certificate.offline_validity_days = null;
     context.db.prepare('UPDATE merchant_license_state SET certificate_signature=? WHERE id=1').run(signCertificate(certificate,fixtureSigningKey));
-    context.db.prepare("UPDATE merchant_license_state SET status='active',certificate_json=?,expires_at=NULL,offline_valid_until=NULL,reason_code=NULL,updated_at=? WHERE id=1").run(JSON.stringify(certificate), new Date().toISOString());
+    context.db.prepare("UPDATE merchant_license_state SET status='active',certificate_json=?,expires_at=NULL,offline_valid_until=NULL,last_validated_at='2020-01-01T00:00:00.000Z',reason_code=NULL,updated_at=? WHERE id=1").run(JSON.stringify(certificate), new Date().toISOString());
     const status = await context.app.inject({ method: "GET", url: "/api/license/status" });
     assert.equal(status.statusCode, 200, status.body);
     assert.equal(status.json().data.status, "active");
+    assert.equal(status.json().data.expires_at, null);
     const writable = await context.app.inject({ method: "POST", url: "/api/products/1/stock/increase", headers: context.auth, payload: { quantity: 1 } });
     assert.equal(writable.statusCode, 200, writable.body);
   } finally {

@@ -257,7 +257,9 @@ export default function CoreV2BusinessSettings() {
             <strong>
               {license?.expires_at
                 ? new Date(license.expires_at).toLocaleDateString()
-                : '—'}
+                : license?.status === 'active'
+                  ? t('license.lifetime')
+                  : '—'}
             </strong>
           </span>
         </div>
