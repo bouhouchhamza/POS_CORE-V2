@@ -28,7 +28,7 @@ export const defaultSettings: AppSettings = {
   cafe_phone: '',
   wifi_name: 'CorePOS',
   wifi_code: '',
-  ticket_header: 'BIMIK POS',
+  ticket_header: 'CorePOS',
   ticket_footer: 'NOUS VOUS REMERCIONS POUR VOTRE VISITE',
   ticket_note: '',
   show_wifi_on_ticket: true,
