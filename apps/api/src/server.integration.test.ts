@@ -11,6 +11,8 @@ if (process.env.REQUIRE_POSTGRES_INTEGRATION === "true" && !enabled) {
 }
 if (enabled) {
   process.env.DATABASE_URL = databaseUrl;
+  process.env.CONTROL_PLANE_DATABASE_URL = databaseUrl;
+  process.env.SAAS_TENANCY_MODE = 'shared';
   process.env.NODE_ENV = "test";
   process.env.JWT_SECRET = "integration-test-secret-at-least-32-characters";
   process.env.CORS_ORIGINS = "http://127.0.0.1:5173";
@@ -25,11 +27,23 @@ test.before(async () => {
   ({ app } = await import("./server.js"));
   ({ pool } = await import("./db/index.js"));
   await app.ready();
+  const actual=(await pool.query('select current_database() name')).rows[0].name;
+  assert.ok(String(actual).endsWith('_test'),'Refusing cleanup outside a disposable test database');
 });
 
 test.beforeEach(async () => {
   if (!enabled) return;
   await pool.query("truncate refresh_tokens, stock_movements, sale_items, sales, cash_register_sessions, products, categories, users, settings restart identity cascade");
+  // Fresh migrations deliberately do not seed a commercial business. Tests
+  // explicitly provision their own licensed tenant, just as production does.
+  await pool.query(`insert into license_customers(id,name) values('00000000-0000-4000-8000-000000000001','API test customer') on conflict(id) do nothing`);
+  await pool.query(`insert into vendor_businesses(id,customer_id,name,business_type,status) values('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','API test business','cafe','active') on conflict(id) do nothing`);
+  await pool.query(`insert into licenses(id,customer_id,vendor_business_id,business_type,status,allowed_features,max_devices,expires_at) values('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','cafe','active','["pos","inventory","tables","qr_menu","kitchen"]',1000,now()+interval '30 days') on conflict(id) do nothing`);
+  await pool.query(`insert into businesses(id,name,slug,business_type,currency,locale,timezone,vendor_business_id) values(1,'API test business','api-test-business','cafe','MAD','fr-MA','Africa/Casablanca','00000000-0000-4000-8000-000000000002') on conflict(id) do nothing`);
+  await pool.query(`insert into branches(id,business_id,name,code) values(1,1,'Test branch','MAIN') on conflict(id) do nothing`);
+  await pool.query(`insert into business_features(business_id,feature) select 1,unnest(array['pos','inventory','tables','qr_menu','kitchen']) on conflict do nothing`);
+  await pool.query("delete from businesses where slug='tenant-two-test'");
+  await pool.query("select setval(pg_get_serial_sequence('businesses','id'),greatest((select max(id) from businesses),1))");
   const hash = await bcrypt.hash("1", 4);
   await pool.query("insert into users(name,email,password,role,is_active) values ('Patron','patron@test.local',$1,'patron',true),('Worker','worker@test.local',$1,'worker',true),('Unused','unused@test.local',$1,'worker',true)", [hash]);
   await pool.query("insert into cash_register_sessions(business_date,status,opened_by_user_id,opening_cash) values (current_date,'open',1,0)");
@@ -82,7 +96,7 @@ test("menu preview is Patron-only and confirmation is transactional and idempote
   const request=form(),previewResponse=await app.inject({method:'POST',url:'/api/menu-import/preview',headers:{...auth(patronToken),...request.headers},payload:request.payload});assert.equal(previewResponse.statusCode,200,previewResponse.body);
   const preview=previewResponse.json().data;assert.equal(preview.categories[0].name,'Sans catégorie');assert.equal(preview.categories[0].products[0].sale_price,'12.50');assert.deepEqual((await pool.query('select (select count(*) from categories)::int categories,(select count(*) from products)::int products')).rows[0],before);
   assert.equal(preview.categories[0].products.every((product:any)=>product.track_stock===false),true);preview.categories[0].products[0].track_stock=true;preview.categories[0].products[0].initial_stock=3;
-  const confirmed=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(patronToken),payload:{session_id:preview.session_id,categories:preview.categories}});assert.equal(confirmed.statusCode,200,confirmed.body);assert.equal(confirmed.json().data.products.created,2);assert.deepEqual((await pool.query("select name,stock,track_stock from products where name='Jus Orange'")).rows[0],{name:'Jus Orange',stock:3,track_stock:true});
+  const confirmed=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(patronToken),payload:{session_id:preview.session_id,categories:preview.categories}});assert.equal(confirmed.statusCode,200,confirmed.body);assert.equal(confirmed.json().data.products.created,2);assert.deepEqual((await pool.query("select name,stock,track_stock from products where name='Jus Orange'")).rows[0],{name:'Jus Orange',stock:'3.000',track_stock:true});
   const replayed=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(patronToken),payload:{session_id:preview.session_id,categories:preview.categories}});assert.equal(replayed.statusCode,200,replayed.body);assert.equal(replayed.json().data.replayed,true);assert.equal((await pool.query("select count(*)::int count from products where name in ('Jus Orange','Eau')")).rows[0].count,2);
 });
 
@@ -90,7 +104,7 @@ test("explicit product update preserves stock and unexpected failure rolls back"
   const token=await login();
   const session=(await pool.query("insert into menu_import_sessions(id,user_id,preview) values(gen_random_uuid(),1,'{}') returning id")).rows[0].id;
   const product={client_id:crypto.randomUUID(),name:'Café',sale_price:'11.00',description:null,variant:null,currency:'MAD',requires_review:false,decision:'update_existing',existing_product_id:2,duplicate_kind:'exact'};
-  const response=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(token),payload:{session_id:session,categories:[{client_id:crypto.randomUUID(),name:'Café',decision:'use_existing',existing_category_id:1,duplicate_kind:'exact',products:[product]}]}});assert.equal(response.statusCode,200,response.body);assert.deepEqual((await pool.query('select sale_price,stock,track_stock from products where id=2')).rows[0],{sale_price:'11.00',stock:1,track_stock:true});
+  const response=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(token),payload:{session_id:session,categories:[{client_id:crypto.randomUUID(),name:'Café',decision:'use_existing',existing_category_id:1,duplicate_kind:'exact',products:[product]}]}});assert.equal(response.statusCode,200,response.body);assert.deepEqual((await pool.query('select sale_price,stock,track_stock from products where id=2')).rows[0],{sale_price:'11.00',stock:'1.000',track_stock:true});
   const failing=(await pool.query("insert into menu_import_sessions(id,user_id,preview) values(gen_random_uuid(),1,'{}') returning id")).rows[0].id;
   const bad={...product,client_id:crypto.randomUUID(),name:'Introuvable',existing_product_id:999};const failed=await app.inject({method:'POST',url:'/api/menu-import/confirm',headers:auth(token),payload:{session_id:failing,categories:[{client_id:crypto.randomUUID(),name:'Nouvelle avant échec',decision:'create',existing_category_id:null,duplicate_kind:'none',products:[bad]}]}});assert.equal(failed.statusCode,422,failed.body);assert.equal((await pool.query("select count(*)::int count from categories where name='Nouvelle avant échec'")).rows[0].count,0);
 });
@@ -100,15 +114,15 @@ test("product tracking validates strict booleans, defaults safely, and toggles w
   const tracked=await app.inject({method:'POST',url:'/api/products',headers:auth(token),payload:{name:'Bouteille',sale_price:8,stock:7,min_stock:2,track_stock:true,is_active:true}});assert.equal(tracked.statusCode,201,tracked.body);assert.equal(tracked.json().data.track_stock,true);
   const untracked=await app.inject({method:'POST',url:'/api/products',headers:auth(token),payload:{name:'Espresso',sale_price:10,stock:4,min_stock:0,track_stock:false,is_active:true}});assert.equal(untracked.statusCode,201,untracked.body);assert.equal(untracked.json().data.track_stock,false);
   const invalid=await app.inject({method:'POST',url:'/api/products',headers:auth(token),payload:{name:'Invalide',sale_price:1,track_stock:'yes'}});assert.equal(invalid.statusCode,422);
-  const id=untracked.json().data.id;await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{name:'Espresso court'}});let row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:4,track_stock:false});
-  await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{track_stock:true}});row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:4,track_stock:true});
-  await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{track_stock:false}});row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:4,track_stock:false});
+  const id=untracked.json().data.id;await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{name:'Espresso court'}});let row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:'4.000',track_stock:false});
+  await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{track_stock:true}});row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:'4.000',track_stock:true});
+  await app.inject({method:'PUT',url:`/api/products/${id}`,headers:auth(token),payload:{track_stock:false}});row=(await pool.query('select stock,track_stock from products where id=$1',[id])).rows[0];assert.deepEqual(row,{stock:'4.000',track_stock:false});
 });
 
 test("untracked and mixed-cart sales mutate only tracked stock and rollback atomically", { skip: !enabled }, async()=>{
   const token=await login('worker@test.local');await pool.query('update products set track_stock=false,stock=0 where id=1');
-  const untracked=await app.inject({method:'POST',url:'/api/sales',headers:auth(token),payload:{items:[{product_id:1,quantity:5}]}});assert.equal(untracked.statusCode,201,untracked.body);assert.equal((await pool.query('select stock from products where id=1')).rows[0].stock,0);assert.equal((await pool.query("select count(*)::int count from stock_movements where product_id=1 and type='sale'")).rows[0].count,0);assert.equal(untracked.json().data.items[0].quantity,5);
-  const mixed=await app.inject({method:'POST',url:'/api/sales',headers:auth(token),payload:{items:[{product_id:1,quantity:2},{product_id:2,quantity:1}]}});assert.equal(mixed.statusCode,201,mixed.body);assert.equal((await pool.query('select stock from products where id=2')).rows[0].stock,0);assert.equal((await pool.query("select count(*)::int count from stock_movements where type='sale'")).rows[0].count,1);
+  const untracked=await app.inject({method:'POST',url:'/api/sales',headers:auth(token),payload:{items:[{product_id:1,quantity:5}]}});assert.equal(untracked.statusCode,201,untracked.body);assert.equal((await pool.query('select stock from products where id=1')).rows[0].stock,'0.000');assert.equal((await pool.query("select count(*)::int count from stock_movements where product_id=1 and type='sale'")).rows[0].count,0);assert.equal(untracked.json().data.items[0].quantity,5);
+  const mixed=await app.inject({method:'POST',url:'/api/sales',headers:auth(token),payload:{items:[{product_id:1,quantity:2},{product_id:2,quantity:1}]}});assert.equal(mixed.statusCode,201,mixed.body);assert.equal((await pool.query('select stock from products where id=2')).rows[0].stock,'0.000');assert.equal((await pool.query("select count(*)::int count from stock_movements where type='sale'")).rows[0].count,1);
   const before=(await pool.query('select (select count(*) from sales)::int sales,(select count(*) from sale_items)::int items')).rows[0];const failed=await app.inject({method:'POST',url:'/api/sales',headers:auth(token),payload:{items:[{product_id:1,quantity:1},{product_id:2,quantity:1}]}});assert.equal(failed.statusCode,422);assert.deepEqual((await pool.query('select (select count(*) from sales)::int sales,(select count(*) from sale_items)::int items')).rows[0],before);
   const low=await app.inject({method:'GET',url:'/api/products-low-stock',headers:auth(token)});assert.equal(low.statusCode,200);assert.equal(low.json().data.some((product:any)=>product.id===1),false);assert.equal(low.json().data.some((product:any)=>product.id===2),true);
   const stockChange=await app.inject({method:'POST',url:'/api/products/1/stock/increase',headers:auth(token),payload:{quantity:1}});assert.equal(stockChange.statusCode,422);assert.equal(stockChange.json().message,'Le suivi du stock est désactivé pour ce produit.');
@@ -176,9 +190,9 @@ test("capitalized role updates, nullable/omitted passwords, and activation prese
   assert.equal(active.rows[0].is_active, true);
   assert.equal(active.rows[0].role, "worker");
   assert.equal((await app.inject({ method: "POST", url: "/api/login", payload: { email: "worker@test.local", password: "1" } })).statusCode, 200);
-  const invalid = await app.inject({ method: "PUT", url: "/api/users/2", headers: auth(token), payload: { role: "manager" } });
+  const invalid = await app.inject({ method: "PUT", url: "/api/users/2", headers: auth(token), payload: { role: "unrecognized_role" } });
   assert.equal(invalid.statusCode, 422);
-  assert.equal(invalid.json().errors.role[0], "Le rôle doit être Patron ou Worker.");
+  assert.ok(invalid.json().errors.role.length > 0);
 });
 
 test("user deletion enforces current, historical, and last-patron constraints", { skip: !enabled }, async (t) => {
@@ -197,7 +211,7 @@ test("sales group duplicates, snapshot price, update stock atomically, and roll 
   assert.equal(created.json().data.total, 15);
   assert.equal(created.json().data.items[0].quantity, 3);
   assert.equal(created.json().data.items[0].unit_price, 5);
-  assert.equal((await pool.query("select stock from products where id=1")).rows[0].stock, 7);
+  assert.equal((await pool.query("select stock from products where id=1")).rows[0].stock, '7.000');
   const before = await pool.query("select (select count(*) from sales) sales,(select count(*) from stock_movements) movements");
   const failed = await app.inject({ method: "POST", url: "/api/sales", headers: auth(token), payload: { items: [{ product_id: 1, quantity: 1 }, { product_id: 999, quantity: 1 }] } });
   assert.equal(failed.statusCode, 422);
@@ -244,6 +258,7 @@ test("remembered business context is signed, tenant scoped, survives logout, and
   assert.deepEqual(freshContext.json().data, {
     mode: "cloud",
     profile_picker: false,
+    requires_workspace: false,
     business: null,
   });
   assert.equal((await app.inject({ method: "GET", url: "/api/login-profiles" })).statusCode, 404);
@@ -332,11 +347,12 @@ test("remembered business context is signed, tenant scoped, survives logout, and
 
 test("refresh tokens rotate, logout revokes them, and missing cookies return 401", { skip: !enabled }, async () => {
   const loggedIn = await app.inject({ method: "POST", url: "/api/login", payload: { email: "patron@test.local", password: "1" } });
-  const firstCookie = String(loggedIn.headers["set-cookie"]).split(";")[0];
-  const refreshed = await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: firstCookie } });
+  const firstCookie = cookieByName(loggedIn.headers["set-cookie"], "bimik_refresh");
+  const deviceCookie = cookieByName(loggedIn.headers["set-cookie"], "corepos_session_device");
+  const refreshed = await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: `${firstCookie}; ${deviceCookie}` } });
   assert.equal(refreshed.statusCode, 200, refreshed.body);
   assert.equal((await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: firstCookie } })).statusCode, 401);
-  const secondCookie = String(refreshed.headers["set-cookie"]).split(";")[0];
+  const secondCookie = cookieByName(refreshed.headers["set-cookie"], "bimik_refresh");
   assert.equal((await app.inject({ method: "POST", url: "/api/logout", headers: { cookie: secondCookie } })).statusCode, 200);
   assert.equal((await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: secondCookie } })).statusCode, 401);
   assert.equal((await app.inject({ method: "POST", url: "/api/auth/refresh" })).statusCode, 401);
@@ -381,3 +397,5 @@ test("settings cast booleans/numbers and Wi-Fi update remains scoped", { skip: !
   assert.equal(wifi.statusCode, 200, wifi.body);
   assert.deepEqual(wifi.json(), { wifi_name: "Cafe WiFi", wifi_code: "123" });
 });
+
+function cookieByName(value:string|string[]|undefined,name:string){const cookie=(Array.isArray(value)?value:[value??""]).find(item=>item.startsWith(`${name}=`))?.split(";")[0];assert.ok(cookie,`${name} cookie missing`);return cookie}

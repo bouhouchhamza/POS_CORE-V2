@@ -6,6 +6,9 @@ fn main() {
     // key. The key is public (not the signing secret) and is embedded by
     // option_env! in lib.rs. Debug/test builds stay convenient for developers.
     if std::env::var("PROFILE").as_deref() == Ok("release") {
+        if std::env::var("LICENSE_SERVER_URL").as_deref() != Ok("https://pos.workflowtools.space") {
+            panic!("Release build blocked: use the production CorePOS licence server.");
+        }
         let key = std::env::var("LICENSE_SIGNING_PUBLIC_KEY")
             .expect("Release build blocked: LICENSE_SIGNING_PUBLIC_KEY is required.");
         let trimmed = key.trim();

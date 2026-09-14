@@ -70,9 +70,9 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
     <>
       <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
         <div className="brand">
-          <span className="brand-mark">BP</span>
+          <span className="brand-mark">CP</span>
           <div>
-            <strong>Bimik POS</strong>
+            <strong>CorePOS</strong>
             <small>
               {user?.business?.name ?? t('brand.subtitle')}
             </small>

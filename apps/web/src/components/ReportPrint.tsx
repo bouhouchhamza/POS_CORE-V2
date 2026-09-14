@@ -31,7 +31,7 @@ export default function ReportPrint({
   return (
     <section className={`report-print ${className}`}>
       <header className="report-print-header">
-        <h1>Bimik POS</h1>
+        <h1>CorePOS</h1>
         <h2>{title}</h2>
         <p>{periodLabel}</p>
       </header>

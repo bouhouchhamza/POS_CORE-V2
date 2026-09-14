@@ -1130,7 +1130,7 @@ app.post(
   async (_req, reply) =>
     reply.code(409).send({
       message:
-        "Printing is performed locally by the Bimik Cafe desktop client.",
+        "Printing is performed locally by the CorePOS desktop client.",
     }),
 );
 

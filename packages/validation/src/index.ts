@@ -2,6 +2,12 @@ import { z } from "zod";
 import { businessTypes, featureKeys, roleKeys } from '@bimik/shared-types';
 export const featureKeySchema=z.enum(featureKeys);
 export const businessTypeSchema=z.enum(businessTypes);
+const offlineDeviceFacts={installation_id:z.string().uuid(),device_public_key:z.string().min(40).max(5000),device_name:z.string().min(1).max(200),app_version:z.string().min(1).max(100),nonce:z.string().min(16).max(200),requested_at:z.string().datetime(),device_proof:z.string().min(40).max(500)};
+export const offlineRequestSchema=z.discriminatedUnion('version',[
+  z.object({version:z.literal(1),...offlineDeviceFacts,business_type:businessTypeSchema}).strict(),
+  z.object({version:z.literal(2),...offlineDeviceFacts,platform:z.string().min(1).max(80)}).strict(),
+]);
+export const commercialCertificateSchema=z.object({version:z.literal(2),certificate_id:z.string().uuid(),license_id:z.string().uuid(),customer_id:z.string().uuid(),vendor_business_id:z.string().uuid(),business_id:z.number().int().positive().nullable(),business_type:businessTypeSchema,plan:z.string().nullable(),features:z.array(z.enum(featureKeys)).max(featureKeys.length).refine(items=>new Set(items).size===items.length),installation_id:z.string().uuid(),device_fingerprint:z.string().regex(/^[a-f0-9]{64}$/),issued_at:z.string().datetime(),expires_at:z.string().datetime().nullable(),offline_validity_days:z.number().int().positive().nullable()}).strict();
 export const coreRoleSchema=z.enum(roleKeys);
 export const businessFeaturesSchema=z.object({enabled_features:z.array(featureKeySchema).max(featureKeys.length)}).strict();
 export const businessUpdateSchema=z.object({name:z.string().trim().min(1).max(255),business_type:businessTypeSchema,currency:z.string().trim().length(3),locale:z.string().trim().min(2).max(20),timezone:z.string().trim().min(1).max(100)}).partial();

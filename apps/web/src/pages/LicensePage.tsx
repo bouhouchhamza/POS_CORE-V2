@@ -1,3 +1,4 @@
+import { offlineProofPayload } from '@bimik/shared-types'
 import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import QRCode from 'qrcode'
@@ -59,26 +60,6 @@ const onlineProofPayload = (input: {
     input.nonce,
     input.requested_at,
   ].join('\n')
-const offlineProofPayload = (input: {
-  installation_id: string
-  device_public_key: string
-  device_name: string
-  app_version: string
-  business_type: string
-  nonce: string
-  requested_at: string
-}) =>
-  [
-    'posreq-v1',
-    input.installation_id,
-    input.device_public_key,
-    input.device_name,
-    input.app_version,
-    input.business_type,
-    input.nonce,
-    input.requested_at,
-  ].join('\n')
-
 const importProofPayload = (
   certificateId: string,
   installationId: string,
@@ -268,10 +249,9 @@ export default function LicensePage() {
   const [error, setError] = useState<string | null>(null)
   const [request, setRequest] = useState<unknown>(null)
   const [qr, setQr] = useState('')
-  const [businessType, setBusinessType] = useState('cafe')
-  const [configuredBusinessType, setConfiguredBusinessType] = useState<string | null>(null)
   const [configured, setConfigured] = useState(false)
   const certificate = status?.certificate as Record<string, unknown> | undefined
+  const licensedBusinessType=typeof certificate?.business_type==='string'?certificate.business_type:null
   const hasOfflinePolicy = Boolean(certificate && 'offline_validity_days' in certificate)
   const offlineDays = typeof certificate?.offline_validity_days === 'number' ? certificate.offline_validity_days : null
   const permanentOffline = hasOfflinePolicy && certificate?.offline_validity_days == null
@@ -287,16 +267,6 @@ export default function LicensePage() {
       .then((setup) => {
         setConfigured(setup.configured)
 
-        const configuredType =
-          setup.configured && setup.business?.business_type
-            ? setup.business.business_type
-            : null
-
-        setConfiguredBusinessType(configuredType)
-
-        if (configuredType) {
-          setBusinessType(configuredType)
-        }
       })
       .catch(() => undefined)
   }, [])
@@ -306,7 +276,7 @@ export default function LicensePage() {
       setError(null)
 
       const identity = await deviceIdentity()
-      const device_name = navigator.platform || 'Bimik POS Desktop'
+      const device_name = navigator.platform || 'CorePOS Desktop'
       const app_version = '2.0.8'
 
       if (isTauriRuntime()) {
@@ -361,29 +331,20 @@ export default function LicensePage() {
       setQr('')
 
       const identity = await deviceIdentity()
-      const device_name = navigator.platform || 'Bimik POS Desktop'
+      const device_name = navigator.platform || 'CorePOS Desktop'
       const app_version = '2.0.8'
-      const setup = await getSetupStatus()
-      const business_type =
-        setup.configured && setup.business?.business_type
-          ? setup.business.business_type
-          : businessType
-
-      if (setup.configured && setup.business?.business_type) {
-        setConfiguredBusinessType(setup.business.business_type)
-        setBusinessType(setup.business.business_type)
-      }
       const nonce =
         crypto.randomUUID().replaceAll('-', '') +
         crypto.randomUUID().replaceAll('-', '')
       const requested_at = new Date().toISOString()
 
       const requestPayload = {
+        version:2 as const,
+        platform:'win32',
         installation_id: identity.installation_id,
         device_public_key: identity.public_key,
         device_name,
         app_version,
-        business_type,
         nonce,
         requested_at,
       }
@@ -417,7 +378,7 @@ export default function LicensePage() {
       const certificate=status?.certificate as Record<string,unknown>|undefined
       if(!certificate?.license_id||!certificate?.certificate_id)throw new Error(t('license.noCertificate'))
       const identity=await deviceIdentity(),nonce=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-',''),requested_at=new Date().toISOString()
-      const validationPayload={license_id:String(certificate.license_id),certificate_id:String(certificate.certificate_id),installation_id:identity.installation_id,device_public_key:identity.public_key,device_name:navigator.platform||'Bimik POS Desktop',app_version:'2.0.8',nonce,requested_at}
+      const validationPayload={license_id:String(certificate.license_id),certificate_id:String(certificate.certificate_id),installation_id:identity.installation_id,device_public_key:identity.public_key,device_name:navigator.platform||'CorePOS Desktop',app_version:'2.0.8',nonce,requested_at}
       const device_proof=await signDevicePayload(validationProofPayload(validationPayload),t('license.desktopOnly'))
       await revalidateLicense({
         installation_id:validationPayload.installation_id,
@@ -476,9 +437,9 @@ export default function LicensePage() {
       <section className="license-shell">
         <header className="license-topbar">
           <div className="login-brand license-brand">
-            <span className="brand-mark">BP</span>
+            <span className="brand-mark">CP</span>
             <div>
-              <strong>Bimik POS</strong>
+              <strong>CorePOS</strong>
               <small>{t('license.brand')}</small>
             </div>
           </div>
@@ -590,27 +551,9 @@ export default function LicensePage() {
             <div className="license-offline-content">
               <label className="license-field">
                 <span>{t('license.businessType')}</span>
-                {configuredBusinessType ? (
-                  <input readOnly value={configuredBusinessType} />
-                ) : (
-                  <select
-                    value={businessType}
-                    onChange={(event) => {
-                      setBusinessType(event.target.value)
-                      setRequest(null)
-                      setQr('')
-                    }}
-                  >
-                    {(['cafe','restaurant','library','grocery','drugstore','retail','custom'] as const).map(type=><option key={type} value={type}>{t(`businessType.${type}.title`)}</option>)}
-                  </select>
-                )}
+                <input readOnly value={licensedBusinessType?t(`businessType.${licensedBusinessType}.title`):t('license.typeDetermined')} />
               </label>
-
-              {configuredBusinessType ? (
-                <small className="license-helper">
-                  {t('license.typeLocked')}
-                </small>
-              ) : null}
+              <small className="license-helper">{t(licensedBusinessType?'license.typeBound':'license.typeAutomatic')}</small>
 
               <div className="license-offline-actions">
                 <button

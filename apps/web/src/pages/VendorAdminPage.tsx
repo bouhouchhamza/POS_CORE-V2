@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { businessTypes, featureKeys } from '@bimik/shared-types'
+import { offlineRequestSchema } from '@bimik/validation'
 import { vendorApi } from '../api/license'
 
 type MainSection = 'dashboard'|'customers'|'licenses'|'devices'|'advanced'
@@ -201,7 +202,6 @@ export default function VendorAdminPage(){
   const [customers,setCustomers] = useState<Row[]>([])
   const [businesses,setBusinesses] = useState<Row[]>([])
   const [plans,setPlans] = useState<Row[]>([])
-  const [licenses,setLicenses] = useState<Row[]>([])
   const [loading,setLoading] = useState(false)
   const [error,setError] = useState('')
   const [success,setSuccess] = useState('')
@@ -217,22 +217,20 @@ export default function VendorAdminPage(){
   const [offlineRequest,setOfflineRequest] = useState<Row|null>(null)
   const [offlineLicenseId,setOfflineLicenseId] = useState('')
   const [offlineFingerprint,setOfflineFingerprint] = useState('')
-  const [currentTime,setCurrentTime] = useState(() => Date.now())
 
-  const activeLicenses = useMemo(()=>licenses.filter(item=>item.status==='active'&&(parsedDate(item.expires_at)?.getTime()??0)>currentTime&&(!offlineRequest?.business_type||!item.business_type||item.business_type===offlineRequest.business_type)),[licenses,offlineRequest,currentTime])
+  const [activeLicenses,setActiveLicenses] = useState<Row[]>([])
 
   const fail = (value:unknown) => setError(value instanceof Error?value.message:'Operation impossible.')
   const clearMessages = () => { setError(''); setSuccess('') }
   const toggle = (list:string[],item:string) => list.includes(item)?list.filter(value=>value!==item):[...list,item]
 
   async function references(){
-    const [c,b,p,l] = await Promise.all([
+    const [c,b,p] = await Promise.all([
       vendorApi.get<Row[]>('/customers'),
       vendorApi.get<Row[]>('/businesses'),
-      vendorApi.get<Row[]>('/plans'),
-      vendorApi.get<Row[]>('/licenses')
+      vendorApi.get<Row[]>('/plans')
     ])
-    setCustomers(c); setBusinesses(b); setPlans(p); setLicenses(l)
+    setCustomers(c); setBusinesses(b); setPlans(p)
   }
 
   async function loadDashboard(){ setDashboard(await vendorApi.get<Dashboard>('/dashboard')) }
@@ -282,11 +280,6 @@ export default function VendorAdminPage(){
       try{ await loadDashboard() }catch{ setConnected(false) }
     }).catch(()=>{ if(active)setConnected(false) }).finally(()=>{ if(active)setLoading(false) })
     return()=>{active=false}
-  },[])
-
-  useEffect(()=>{
-    const timer=window.setInterval(()=>setCurrentTime(Date.now()),60_000)
-    return()=>window.clearInterval(timer)
   },[])
 
   async function logout(){
@@ -453,8 +446,8 @@ export default function VendorAdminPage(){
   async function importRequest(file:File){
     try{
       const parsed=JSON.parse(await file.text())
-      for(const field of ['installation_id','device_public_key','device_name','app_version','business_type','nonce','requested_at','device_proof']) if(typeof parsed[field]!=='string'||!parsed[field]) throw new Error(`Champ .posreq manquant: ${field}`)
-      if(parsed.version!==1||!businessTypes.includes(parsed.business_type)) throw new Error('Version ou type de commerce .posreq non pris en charge.')
+      const valid=offlineRequestSchema.parse(parsed)
+      setActiveLicenses(await vendorApi.post<Row[]>('/offline-activations/candidates',valid))
       setOfflineRequest(parsed)
       const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(parsed.device_public_key))
       setOfflineFingerprint(Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join(''))
@@ -492,7 +485,7 @@ export default function VendorAdminPage(){
 
   function advancedTable(){
     if(loading)return <div className="vendor-empty">Chargement...</div>
-    if(advancedSection==='offline') return <article className="settings-card vendor-offline"><label>Importer une demande .posreq<input accept=".posreq,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void importRequest(file)}} type="file"/></label>{offlineRequest?<div className="vendor-request-details"><p><strong>Installation:</strong> {offlineRequest.installation_id}</p><p><strong>Appareil:</strong> {offlineRequest.device_name}</p><p><strong>Type:</strong> {offlineRequest.business_type}</p><p><strong>Empreinte:</strong> <code>{offlineFingerprint}</code></p><p><strong>Demande:</strong> {date(offlineRequest.requested_at)}</p><label>Licence compatible active<select value={offlineLicenseId} onChange={e=>setOfflineLicenseId(e.target.value)}><option value="">Selectionner</option>{activeLicenses.map(item=><option key={item.id} value={item.id}>{item.customer_name} - {item.vendor_business_name} · {offlineLabel(item.offline_validity_days)} ({item.active_devices??0}/{item.max_devices})</option>)}</select></label><button className="button" disabled={!offlineLicenseId||loading} onClick={()=>void issueOffline()}>Generer le fichier .poslic</button></div>:<p>Selectionnez la demande generee par le Desktop. La preuve appareil sera verifiee par le serveur.</p>}</article>
+    if(advancedSection==='offline') return <article className="settings-card vendor-offline"><label>Importer une demande .posreq<input accept=".posreq,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void importRequest(file)}} type="file"/></label>{offlineRequest?<div className="vendor-request-details"><p><strong>Installation:</strong> {offlineRequest.installation_id}</p><p><strong>Appareil:</strong> {offlineRequest.device_name}</p><p><strong>Type:</strong> {offlineRequest.version===2?'Déterminé par la licence':offlineRequest.business_type}</p><p><strong>Empreinte:</strong> <code>{offlineFingerprint}</code></p><p><strong>Demande:</strong> {date(offlineRequest.requested_at)}</p><label>Licence compatible active<select value={offlineLicenseId} onChange={e=>setOfflineLicenseId(e.target.value)}><option value="">Selectionner</option>{activeLicenses.map(item=><option key={item.id} value={item.id}>{item.customer_name} - {item.vendor_business_name} · {item.business_type} · {offlineLabel(item.offline_validity_days)} ({item.active_devices??0}/{item.max_devices})</option>)}</select></label><button className="button" disabled={!offlineLicenseId||loading} onClick={()=>void issueOffline()}>Generer le fichier .poslic</button></div>:<p>Selectionnez la demande generee par le Desktop. La preuve appareil sera verifiee par le serveur.</p>}</article>
     if(!rows.length)return <div className="vendor-empty">Aucune donnee.</div>
     if(advancedSection==='businesses')return <div className="table-wrap"><table><thead><tr><th>Business</th><th>Client</th><th>Type</th><th>Statut</th><th>Provisionne</th><th>Workspace / DB</th><th></th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td><strong>{r.name}</strong></td><td>{r.customer_name??'-'}</td><td>{r.business_type??'-'}</td><td>{badge(r.status)}</td><td>{r.runtime_business_id?'Oui':'Non'}</td><td>{r.tenant_slug?<><code>{r.tenant_slug}</code><br/><small>{r.tenant_database_name??'-'} · {r.tenant_status??'-'}</small></>:'-'}</td><td><button className="button secondary" onClick={()=>{setBusiness({id:r.id,customer_id:r.customer_id??'',name:r.name??'',business_type:r.business_type??'retail',status:r.status??'active',notes:r.notes??''});setModal('business')}}>Modifier</button></td></tr>)}</tbody></table></div>
     if(advancedSection==='plans')return <div className="table-wrap"><table><thead><tr><th>Plan</th><th>Appareils</th><th>Par canal</th><th>Offline</th><th>Modules</th><th></th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td><strong>{r.name}</strong><br/><code>{r.code}</code></td><td>{r.default_device_limit??1}</td><td><small>POS {r.default_desktop_device_limit??'∞'} · Web {r.default_web_device_limit??'∞'} · Mobile {r.default_mobile_device_limit??'∞'}</small></td><td>{offlineLabel(r.offline_validity_days)}</td><td className="vendor-features">{r.features?.map(f=>labels[f]??f).join(', ')}</td><td><button className="button secondary" onClick={()=>{setPlan({id:r.id,code:r.code??'',name:r.name??'',features:Array.isArray(r.features)?r.features:[],default_device_limit:Number(r.default_device_limit??1),default_desktop_device_limit:r.default_desktop_device_limit==null?null:Number(r.default_desktop_device_limit),default_web_device_limit:r.default_web_device_limit==null?null:Number(r.default_web_device_limit),default_mobile_device_limit:r.default_mobile_device_limit==null?null:Number(r.default_mobile_device_limit),offline_validity_days:r.offline_validity_days==null?null:Number(r.offline_validity_days),active:r.active!==false});setModal('plan')}}>Modifier</button></td></tr>)}</tbody></table></div>

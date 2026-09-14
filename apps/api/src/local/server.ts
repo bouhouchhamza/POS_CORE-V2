@@ -24,6 +24,7 @@ import { immediate, openLocalDatabase } from "./database.js";
 import { ensureLocalPaths, localSecret, resolveLocalPaths, type LocalPaths } from "./paths.js";
 import type { DatabaseSync } from "node:sqlite";
 import { registerLocalCoreV2Routes } from '../core-v2/local-routes.js';
+import {readLocalCertificate} from '../license/local-certificate.js';
 import type {Role} from '@bimik/shared-types';
 
 declare module "@fastify/jwt" {
@@ -70,7 +71,7 @@ export async function buildLocalApp(options: LocalServerOptions = {}) {
   const logFile = path.join(paths.logs, "api.log");
   if (options.logger) rotateLocalLog(logFile);
   const app = Fastify({ logger: options.logger ? { level: "info", file: logFile, redact: ["req.headers.authorization", "req.headers.cookie", "res.headers.set-cookie", "req.body.password", "req.body.wifi_password"] } : false, bodyLimit: 6 * 1024 * 1024 });
-  app.log.info({ app_data_dir: paths.root, sqlite_database: paths.database }, "Bimik local database path resolved");
+  app.log.info({ app_data_dir: paths.root, sqlite_database: paths.database }, "CorePOS local database path resolved");
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(cors, { credentials: true, methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allowedHeaders: ["Accept", "Authorization", "Content-Type"], origin(origin, done) { const allowed = !origin || origin === "tauri://localhost" || origin === "http://tauri.localhost" || /^http:\/\/(127\.0\.0\.1|localhost):5173$/.test(origin); done(allowed ? null : Object.assign(new Error("Origine refusée."), { statusCode: 403 }), allowed); } });
   await app.register(cookie);
@@ -143,7 +144,8 @@ export async function buildLocalApp(options: LocalServerOptions = {}) {
     if(reason==='active'&&!state?.certificate_json)reason='activation_required';
     if(state?.certificate_json){
       try{
-        const certificate=JSON.parse(state.certificate_json) as {issued_at:string;expires_at:string|null;offline_validity_days:number|null};
+        const certificate=readLocalCertificate(state);
+        if(!certificate)throw new Error('Invalid cached certificate');
         const commercial=certificate.expires_at?Date.parse(certificate.expires_at):Number.POSITIVE_INFINITY;
         const offline=certificate.offline_validity_days?Date.parse(certificate.issued_at)+certificate.offline_validity_days*86_400_000:Number.POSITIVE_INFINITY;
         if(commercial<=Date.now())reason='expired';else if(offline<=Date.now())reason='offline_validity_exceeded';
@@ -1513,11 +1515,9 @@ function reportForMonth(
     commandes,
   };
 }
-export async function startLocalServer() { const host = "127.0.0.1"; const port = Number(process.env.BIMIK_LOCAL_PORT ?? 32145); const paths=resolveLocalPaths(); console.info(`Bimik Cafe sidecar: SQLite=${paths.database}`); const app = await buildLocalApp({ logger: true, paths }); await app.listen({ host, port }); return app; }
+export async function startLocalServer() { const host = "127.0.0.1"; const port = Number(process.env.BIMIK_LOCAL_PORT ?? 32145); const paths=resolveLocalPaths(); console.info(`CorePOS sidecar: SQLite=${paths.database}`); const app = await buildLocalApp({ logger: true, paths }); await app.listen({ host, port }); return app; }
 const entry = process.env.BIMIK_SIDECAR === "1" || (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href);
 if (entry) startLocalServer().catch((error) => { console.error(error instanceof Error ? error.message : "Le service local n'a pas démarré."); process.exitCode = 1; });
-
-
 
 
 

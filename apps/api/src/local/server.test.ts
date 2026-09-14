@@ -10,6 +10,10 @@ import { ensureLocalPaths, resolveLocalPaths } from "./paths.js";
 import { buildLocalApp } from "./server.js";
 import { fingerprint, signCertificate, type LicenseCertificateV2 } from "../license/crypto.js";
 
+const fixtureVendorKeys=crypto.generateKeyPairSync('ed25519');
+const fixtureSigningKey=fixtureVendorKeys.privateKey.export({type:'pkcs8',format:'pem'}).toString();
+process.env.LICENSE_SIGNING_PUBLIC_KEY=fixtureVendorKeys.publicKey.export({type:'spki',format:'pem'}).toString();
+
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bimik-offline-api-"));
   const paths = ensureLocalPaths(resolveLocalPaths({ BIMIK_DATA_DIR: root }));
@@ -100,6 +104,7 @@ async function fixture() {
     timestamp,
     timestamp
   );
+  db.prepare('UPDATE merchant_license_state SET certificate_signature=? WHERE id=1').run(signCertificate(fixtureCertificate,fixtureSigningKey));
   const app = await buildLocalApp({ paths, database: db });
   const login = await app.inject({ method: "POST", url: "/api/login", payload: { email: "patron@test.invalid", password: "1" } });
   const token = login.json().data.access_token as string;
@@ -228,8 +233,9 @@ test("fresh local setup derives Vendor identity, business type, and feature ceil
   const paths = ensureLocalPaths(resolveLocalPaths({ BIMIK_DATA_DIR: root }));
   const db = openLocalDatabase(paths);
   const issued = new Date().toISOString();
-  const certificate = { version: 2, certificate_id: crypto.randomUUID(), license_id: crypto.randomUUID(), customer_id: crypto.randomUUID(), vendor_business_id: crypto.randomUUID(), business_id: null, business_type: "library", plan: "business", features: ["pos", "inventory"], installation_id: crypto.randomUUID(), device_fingerprint: "a".repeat(64), issued_at: issued, expires_at: new Date(Date.now()+86_400_000).toISOString(), offline_validity_days: 30 };
+  const certificate: LicenseCertificateV2 = { version: 2, certificate_id: crypto.randomUUID(), license_id: crypto.randomUUID(), customer_id: crypto.randomUUID(), vendor_business_id: crypto.randomUUID(), business_id: null, business_type: "library", plan: "business", features: ["pos", "inventory"], installation_id: crypto.randomUUID(), device_fingerprint: "a".repeat(64), issued_at: issued, expires_at: new Date(Date.now()+86_400_000).toISOString(), offline_validity_days: 30 };
   db.prepare("UPDATE merchant_license_state SET status='active',license_id=?,customer_id=?,vendor_business_id=?,business_type=?,allowed_features_json=?,certificate_id=?,certificate_version=2,certificate_json=?,device_status='active',updated_at=? WHERE id=1").run(certificate.license_id,certificate.customer_id,certificate.vendor_business_id,certificate.business_type,JSON.stringify(certificate.features),certificate.certificate_id,JSON.stringify(certificate),issued);
+  db.prepare('UPDATE merchant_license_state SET certificate_signature=? WHERE id=1').run(signCertificate(certificate,fixtureSigningKey));
   const app = await buildLocalApp({ paths, database: db });
   const common = { name: "Licensed Library", logo: null, phone: null, address: null, currency: "MAD", locale: "fr-MA", timezone: "Africa/Casablanca" };
   try {
@@ -318,6 +324,7 @@ test("permanent offline certificate keeps operational writes active without a va
     certificate.issued_at = "2020-01-01T00:00:00.000Z";
     certificate.expires_at = null;
     certificate.offline_validity_days = null;
+    context.db.prepare('UPDATE merchant_license_state SET certificate_signature=? WHERE id=1').run(signCertificate(certificate,fixtureSigningKey));
     context.db.prepare("UPDATE merchant_license_state SET status='active',certificate_json=?,expires_at=NULL,offline_valid_until=NULL,reason_code=NULL,updated_at=? WHERE id=1").run(JSON.stringify(certificate), new Date().toISOString());
     const status = await context.app.inject({ method: "GET", url: "/api/license/status" });
     assert.equal(status.statusCode, 200, status.body);
