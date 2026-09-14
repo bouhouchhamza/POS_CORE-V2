@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bimik Cafe Test",
+  "identifier": "bond.nextora.cafe.test",
+  "build": {
+    "beforeBuildCommand": "npm run build:desktop -w @bimik/web",
+    "frontendDist": "../../web/dist"
+  },
+  "bundle": {
+    "targets": ["nsis"],
+    "externalBin": [
+      "binaries/bimik-local-api"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
+  }
+}

@@ -1,0 +1,180 @@
+CORE POS COMPLETE LICENCE SYSTEM FIX REPORT
+
+1. Initial state
+- Local canonical repository: C:\Users\pc\Desktop\Core POS V2 Git
+- Branch: main
+- HEAD before/after: 205465eadf9d406aa544a7ad2c38e6cb8d2fce65
+- The worktree already contained unrelated modified files and eight protected untracked recovery files. They were preserved and were not committed or pushed.
+- Production source HEAD observed: 6185ecaec6c04f752dcb576587e8a6def4ae75b6
+- Initial Core API container: 709a9de9a7ea165cc4b5d742ad66b190a83a3763671d7a2d36af70c40de16320 (healthy).
+
+2. V84 root cause
+- The 119-byte signing secret existed on the host and in the container and both SHA-256 hashes matched.
+- It was bind-mounted read-only as root:root mode 600.
+- The API image was configured as bimik UID/GID 100:101, so the startup shell could not read the file.
+- Command substitution returned an empty value; LICENSE_SIGNING_PRIVATE_KEY was present but empty; signing failed with "Vendor signing key is not configured."
+
+3. Licence architecture discovered
+- Vendor control plane: customers, Vendor Businesses, plans, licences, device registrations, activation/audit history, provisioning keys, status controls and password/token-protected Vendor endpoints.
+- Cloud provisioning: one-time hashed provisioning key atomically creates and binds the runtime business, branch, Patron and licensed feature ceiling.
+- Online desktop activation: Ed25519 device proof -> public /api/license/device-activate -> licence/device/status/replay checks -> Ed25519 Vendor certificate.
+- Offline activation: desktop creates signed .posreq -> authenticated Vendor /offline-activations/issue validates request proof, licence, business type, capacity and replay -> signed .poslic -> local import verifies Vendor signature, machine identity, business binding and validity -> SQLite persistence.
+- Revalidation: signed device request to /api/license/device-validate, including prior certificate/device binding and terminal revocation/status propagation.
+- Effective access remains licence features intersected with enabled business modules and role permissions.
+- Permanent offline is represented by offline_validity_days=null; commercial expires_at remains independently effective.
+
+4. Files inspected
+- apps/api/src/license/routes.ts, crypto.ts, policy.ts and their tests
+- apps/api/src/core-v2/local-routes.ts, routes.ts and setup tests
+- apps/api/src/local/server.ts, migrations.ts and server tests
+- apps/api/drizzle/0010 through 0013 licence/control-plane migrations
+- apps/api/src/server.ts and API Dockerfile/package scripts
+- apps/desktop/src-tauri/src/lib.rs
+- apps/web/src/api/license.ts, LicensePage.tsx, VendorAdminPage.tsx, ProvisionPage.tsx, SetupGate.tsx, CoreV2BusinessSettings.tsx and lifecycle translations
+- production /opt/core-pos-v2-prod/compose.yml, resolved compose, container metadata, mounts, processes and sanitized logs
+
+5. Files changed
+- Local: apps/api/src/license/crypto.ts
+- Local: apps/api/src/license/crypto.test.ts
+- Local: apps/api/src/core-v2/local-routes.ts
+- Local: apps/api/src/local/server.ts (one licence fail-closed line added alongside pre-existing unrelated edits)
+- Local: apps/api/src/local/server.test.ts
+- Local: docs/V84_CORE_POS_SIGNING_KEY_RUNTIME_DIAGNOSTIC.txt
+- Local: docs/CORE_POS_COMPLETE_LICENCE_SYSTEM_FIX_REPORT.txt
+- Production runtime: /opt/core-pos-v2-prod/compose.yml
+
+6. Exact bugs found
+- Production API startup could not read the root-owned 0600 signing secret.
+- Malformed/missing persisted desktop certificate JSON combined with stored status=active could produce a 500 in local route parsing or allow an active state to be trusted without a valid certificate in selected write guards.
+- Cryptographic verification could throw for malformed public-key input instead of returning a safe invalid result.
+
+7. Exact fixes applied
+- Production wrapper starts as root only long enough to read/export the mounted secret, then immediately execs BusyBox su to run Node as bimik.
+- Added strict fail-closed parsing for stored v2 certificates and used it in local status, setup, guards, revalidation and public-table licence checks.
+- Missing/malformed certificate with stale active state now resolves to activation_required / LICENSE_INACTIVE rather than active or internal error.
+- Certificate verification now catches malformed cryptographic input and returns false.
+- Added regression tests for malformed signatures/keys/fields, malformed persisted state and activation persistence after a complete local API restart.
+
+8. Signing-key runtime fix
+- Applied production API compose behavior:
+  user: "0:0"
+  export LICENSE_SIGNING_PRIVATE_KEY from the read-only Docker secret
+  exec su -s /bin/sh bimik -c 'exec node apps/api/dist/src/server.js'
+- Compose validation passed before recreation.
+- Only the Core API container was recreated.
+- New/current API container: bf27aa7074d9daa4d292bc1af398fe1e3e3df272540d3023c25008f91133e24a.
+- Node process verified as UID/GID 100:101.
+- Signing availability was proven by successful real online/offline issuance, without reading the protected Node environment or exposing its value.
+
+9. Backend activation results
+- Vendor authentication with configured server-side credential: PASS (HTTP 200 for protected calls).
+- Unauthenticated Vendor session: correctly rejected (HTTP 401).
+- Isolated production onboarding test: HTTP 201.
+- Online device activation: HTTP 201.
+- Returned production certificate signature: valid against deployed public key.
+- Device validation/revalidation: HTTP 200.
+- Nonce replay: HTTP 409, ACTIVATION_REPLAY.
+- Test provisioning key, device and licence were revoked; test Vendor Business was closed after validation.
+
+10. Offline activation results
+- Production Vendor offline issue: HTTP 201.
+- Certificate format: v2.
+- Production signature verified with deployed public key.
+- Modified certificate failed verification.
+- Certificate installation/fingerprint matched the generated device.
+- Replay returned HTTP 409 ACTIVATION_REPLAY.
+- Test device was revoked afterward.
+- Local .poslic import happy path and persistence are covered by passing route-level tests.
+- A real external installed Windows desktop UI import was not performed, so external desktop E2E remains a validation gap.
+
+11. Licence verification tests
+- Valid signature: PASS.
+- Modified certificate: rejected.
+- Invalid signature: rejected.
+- Malformed public key/signature/required field: rejected without unhandled error.
+
+12. Machine-binding tests
+- Correct production installation/fingerprint binding: PASS.
+- Wrong installation and wrong device public key: rejected by local import/crypto tests.
+- Device validation verifies stored device fingerprint and public key.
+
+13. Expiry tests
+- Commercial expiry produces expired.
+- Offline deadline produces offline_validity_exceeded.
+- Permanent offline (null deadline) remains active while commercial expiry still applies.
+- Expired imported certificates are rejected.
+
+14. Persistence/restart tests
+- Production activation/audit record remained present after Core API restart.
+- Core API returned healthy and /ready returned 200 after restart.
+- New local test imports a signed offline certificate, completely closes/reopens the SQLite API, and confirms active status and certificate identity.
+
+15. Frontend licence validation
+- API client paths match backend activate/offline-request/import/revalidate/status routes.
+- UI supports active, activation_required, expired, suspended, revoked, device_revoked, vendor_business_inactive and offline_validity_exceeded states.
+- FR/EN/AR lifecycle translations exist for those states and actions.
+- Web typecheck, tests and production build passed.
+- No unrelated UI redesign was made.
+
+16. Security checks
+- Private key remained root-owned mode 600 and read-only mounted.
+- Private key was not copied into .env, source, report, API response or frontend.
+- Source scan found no private-key PEM material.
+- Built frontend scan found no LICENSE_SIGNING_PRIVATE_KEY symbol or private-key PEM material.
+- Vendor routes remained authenticated; device endpoints retained proof/freshness/replay controls.
+- Invalid/tampered signatures and wrong machines are rejected.
+- Test plaintext licence/provisioning keys existed only in transient process memory and were never printed.
+- Recent production log scan found no permission error, signing-key missing error or private-key material.
+
+17. Runtime process user
+- Node: UID 100, GID 101 (bimik inside the container; host process table displays numeric IDs).
+
+18. API health
+- Core API container: healthy.
+- https://pos.workflowtools.space/ready: HTTP 200.
+- Core web: HTTP 200.
+- Cafe smoke: HTTP 200.
+- Library smoke: HTTP 200.
+
+19. Tests/build/lint results
+- API typecheck: PASS.
+- API build: PASS (performed by test script).
+- API tests: PASS, 46 passed / 0 failed / 16 pre-existing skipped, 62 total.
+- Web typecheck: PASS.
+- Web tests: PASS, 4 passed / 0 failed.
+- Web production build: PASS; only existing bundle-size/dynamic-import warnings.
+- git diff --check: PASS (line-ending warnings only).
+- Lint: no dedicated run; package scripts were inspected and affected typechecks/tests/builds passed.
+
+20. Remaining gaps
+- The production runtime repair is applied, but the local fail-closed source hardening in this dirty worktree is intentionally not committed, pushed or deployed pending user review.
+- No external installed Windows desktop performed a real .posreq -> Vendor -> .poslic -> UI import cycle in this session. Protocol endpoints, production signing, device proofs, local import and persistence passed independently; therefore the external desktop E2E claim remains PARTIAL_PASS.
+- Real Arabic thermal printer hardware validation remains outside this licensing task.
+
+21. Backup paths
+- /opt/core-pos-v2-prod/compose.yml.pre-license-fix-20260909-171716.bak
+- Backup SHA-256 matched the original before editing: 82a644d5232d641096a9a160661773f0f92f1fb8f4800a112bd595d36ba2edfa.
+
+22. Rollback procedure
+- Copy the verified backup over /opt/core-pos-v2-prod/compose.yml.
+- Run docker compose config --quiet.
+- Recreate only the Core API with docker compose up -d --no-deps --force-recreate api.
+- Wait for healthy, verify /ready, and confirm the prior API image/config behavior.
+- Do not touch Core Postgres, web, Cafe, Library or shared Caddy.
+
+23. Git status
+- HEAD unchanged at 205465eadf9d406aa544a7ad2c38e6cb8d2fce65.
+- No commit and no push.
+- Existing unrelated modifications remain present.
+- All eight protected untracked recovery files remain present and untracked.
+
+24. Final conclusion
+- The confirmed production signing-key blocker is fixed securely and real production online/offline signing works.
+- Signature validation, tamper rejection, device binding, expiry semantics, replay controls, revalidation and persistence passed.
+- Local malformed-state behavior was hardened and tested.
+- Overall result is PARTIAL_PASS only because the previously required external installed Windows desktop activation/import E2E was not physically executed and local source hardening has not yet been reviewed/deployed.
+
+DB_MIGRATION=NO
+CADDY_CHANGED=NO
+COMMIT=NO
+PUSH=NO

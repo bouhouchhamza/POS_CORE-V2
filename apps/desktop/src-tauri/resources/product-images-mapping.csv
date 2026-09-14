@@ -1,0 +1,93 @@
+﻿product_id,product_name,image_file
+1,Café crème,bimik-bundled-001_cafe-creme.png
+2,Café Nes Nes,bimik-bundled-002_cafe-nes-nes.png
+3,Café Noir,bimik-bundled-003_cafe-noir.png
+4,Café allangé,bimik-bundled-004_cafe-allange.png
+5,Double expresso,bimik-bundled-005_double-expresso.png
+6,Cappuccino italien,bimik-bundled-006_cappuccino-italien.png
+7,Cappuccino viennois,bimik-bundled-007_cappuccino-viennois.png
+8,Spanish Coffee,bimik-bundled-008_spanish-coffee.png
+9,Café séparé,bimik-bundled-009_cafe-separe.png
+10,Lipton,bimik-bundled-010_lipton.png
+11,Louiza,bimik-bundled-011_louiza.png
+12,Chocolat chaud,bimik-bundled-012_chocolat-chaud.png
+13,Chocolat ocean,bimik-bundled-013_chocolat-ocean.png
+14,Thé Petit,bimik-bundled-014_the-petit.png
+15,Thé Moyen,bimik-bundled-015_the-moyen.png
+16,Thé grand,bimik-bundled-016_the-grand.png
+17,Iced coffee,bimik-bundled-017_iced-coffee.png
+18,Iced coffee caramel,bimik-bundled-018_iced-coffee-caramel.png
+20,Oulmès Bulles Fruitées Mojito,bimik-bundled-020_oulmes-bulles-fruitees-mojito.png
+21,Sidi Ali 1/5 L,bimik-bundled-021_sidi-ali-1-5-l.png
+22,Sidi Ali 33 cL,bimik-bundled-022_sidi-ali-33-cl.png
+23,Jus d’Orange,bimik-bundled-023_jus-d-orange.png
+24,Jus de Pomme,bimik-bundled-024_jus-de-pomme.png
+25,Jus de Banane,bimik-bundled-025_jus-de-banane.png
+26,Jus de Mangue,bimik-bundled-026_jus-de-mangue.png
+27,Jus de Kiwi,bimik-bundled-027_jus-de-kiwi.png
+28,Jus de Fraise,bimik-bundled-028_jus-de-fraise.png
+29,Panaché,bimik-bundled-029_panache.png
+30,Panaché fruits secs,bimik-bundled-030_panache-fruits-secs.png
+31,Jus d’Avocat,bimik-bundled-031_jus-d-avocat.png
+32,Avocat fruits secs,bimik-bundled-032_avocat-fruits-secs.png
+33,Citron & Gingembre,bimik-bundled-033_citron-gingembre.png
+34,Jus d’Ananas,bimik-bundled-034_jus-d-ananas.png
+35,Jus de Concombre,bimik-bundled-035_jus-de-concombre.png
+36,Jus de Pêche,bimik-bundled-036_jus-de-peche.png
+37,Jus de Kaki,bimik-bundled-037_jus-de-kaki.png
+38,Jus de BIMIK,bimik-bundled-038_jus-de-bimik.png
+39,ZAAZAA,bimik-bundled-039_zaazaa.png
+40,Salade de fruits,bimik-bundled-040_salade-de-fruits.png
+41,Mojito Classique,bimik-bundled-041_mojito-classique.png
+42,Mojito fruits rouges,bimik-bundled-042_mojito-fruits-rouges.png
+43,Mojito bleu Curaçao,bimik-bundled-043_mojito-bleu-curacao.png
+44,Milk-shake Fraise,bimik-bundled-044_milk-shake-fraise.png
+45,Milk-shake Vanille,bimik-bundled-045_milk-shake-vanille.png
+46,Milk-shake Chocolat,bimik-bundled-046_milk-shake-chocolat.png
+47,Frappuccino Chocolat,bimik-bundled-047_frappuccino-chocolat.png
+48,Frappuccino Caramel,bimik-bundled-048_frappuccino-caramel.png
+49,Frappuccino Oreo,bimik-bundled-049_frappuccino-oreo.png
+50,Frappuccino Kit kat,bimik-bundled-050_frappuccino-kit-kat.png
+51,Cocktail exotique (Papaye + Avocat + Panaché),bimik-bundled-051_cocktail-exotique-papaye-avocat-panache.png
+52,Cocktail Sweet dream,bimik-bundled-052_cocktail-sweet-dream.png
+53,Cocktail Paradise,bimik-bundled-053_cocktail-paradise.png
+54,Expresse,bimik-bundled-054_expresse.png
+55,Soussi,bimik-bundled-055_soussi.png
+56,Fassi,bimik-bundled-056_fassi.png
+57,Special BIMIK,bimik-bundled-057_special-bimik.png
+58,Betbouta madhouna et Thé,bimik-bundled-058_betbouta-madhouna-et-the.png
+59,Amlou d’Amande,bimik-bundled-059_amlou-d-amande.png
+60,Miel,bimik-bundled-060_miel.png
+61,Beurre beldia,bimik-bundled-061_beurre-beldia.png
+62,Huile d’Olive,bimik-bundled-062_huile-d-olive.png
+63,Olives,bimik-bundled-063_olives.png
+64,Jben,bimik-bundled-064_jben.png
+65,Betboute,bimik-bundled-065_betboute.png
+66,Fromage,bimik-bundled-066_fromage.png
+67,kasher,bimik-bundled-067_kasher.png
+68,Lanchon,bimik-bundled-068_lanchon.png
+69,Omelette nature,bimik-bundled-069_omelette-nature.png
+70,Omelette au Fromage,bimik-bundled-070_omelette-au-fromage.png
+71,Omelette à la Tomate,bimik-bundled-071_omelette-a-la-tomate.png
+72,Omelette au khliâa,bimik-bundled-072_omelette-au-khliaa.png
+73,Omelette Crevettes 60g,bimik-bundled-073_omelette-crevettes-60g.png
+74,Maqula BIMIK,bimik-bundled-074_maqula-bimik.png
+75,Harira marocaine + Oeuf + Datte + Chabakia,bimik-bundled-075_harira-marocaine-oeuf-datte-chabakia.png
+76,l'eau 33 CL,bimik-bundled-076_l-eau-33-cl.png
+77,Coca cola,bimik-bundled-077_coca-cola.png
+78,Poms,bimik-bundled-078_poms.png
+79,Hawai,bimik-bundled-079_hawai.png
+80,Schwips Citron,bimik-bundled-080_schwips-citron.png
+81,Schwips Tonic,bimik-bundled-081_schwips-tonic.png
+82,Oulmès,bimik-bundled-082_oulmes.png
+83,Oulmès Bulles Fruitées Tropical,bimik-bundled-083_oulmes-bulles-fruitees-tropical.png
+84,Oulmès Bulles Fruitées Orange,bimik-bundled-084_oulmes-bulles-fruitees-orange.png
+85,Oulmès Bulles Fruitées Ananas,bimik-bundled-085_oulmes-bulles-fruitees-ananas.png
+86,Oulmès Bulles Fruitées Fraise,bimik-bundled-086_oulmes-bulles-fruitees-fraise.png
+87,petit pain,bimik-bundled-087_petit-pain.png
+88,Petit Pain madhouna,bimik-bundled-088_petit-pain-madhouna.png
+89,Khebza Meadhouna,bimik-bundled-089_khebza-meadhouna.png
+90,Coca Zero,bimik-bundled-090_coca-zero.png
+91,Sprite,bimik-bundled-091_sprite.png
+92,Garnier,bimik-bundled-092_garnier.png
+93,Msemna,bimik-bundled-093_msemna.png

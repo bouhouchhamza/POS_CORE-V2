@@ -1,0 +1,14 @@
+.git
+node_modules
+**/node_modules
+**/dist
+**/target
+backend
+frontend
+installer-package
+upload
+*.zip
+**/.env
+**/.env.production
+**/*.sqlite
+**/*.log

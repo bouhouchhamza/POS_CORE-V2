@@ -1,0 +1,4 @@
+﻿cafe-origin	https://github.com/bouhouchhamza/Pos_Coffe_System.git (fetch)
+cafe-origin	https://github.com/bouhouchhamza/Pos_Coffe_System.git (push)
+origin	https://github.com/bouhouchhamza/POS_GLOBAL (fetch)
+origin	https://github.com/bouhouchhamza/POS_GLOBAL (push)

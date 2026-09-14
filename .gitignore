@@ -1,0 +1,50 @@
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Laravel
+backend/vendor/
+backend/storage/logs/*.log
+backend/bootstrap/cache/*.php
+
+# Env files
+.env
+apps/*/.env
+apps/*/.env.local
+packages/*/.env
+backend/.env
+frontend/.env
+
+# SQLite local databases
+backend/database/database.sqlite
+installer-package/app/backend/database/database.sqlite
+
+# Installer generated / heavy files
+installer-package/app/php/
+installer-package/installer/
+*.exe
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+# Vite temp files
+frontend/.tmp/
+
+# New production stack
+apps/*/node_modules/
+apps/*/dist/
+packages/*/dist/
+apps/desktop/src-tauri/target/
+uploads-test/
+deploy/.env
+deploy/.env.production
+deploy/backups/
+/backups/
+*.dump
+*.sql.gz
+*.sha256
+*.pem
+*.key
+*.bak

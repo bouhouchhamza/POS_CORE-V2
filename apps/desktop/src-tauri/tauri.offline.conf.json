@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": "npm run dev -w @bimik/web -- --mode desktop",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build:desktop -w @bimik/web",
+    "frontendDist": "../../web/dist"
+  },
+  "bundle": {
+    "externalBin": [
+      "binaries/bimik-local-api"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
+  }
+}

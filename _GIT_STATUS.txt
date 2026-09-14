@@ -1,0 +1,13 @@
+﻿## main...origin/main
+ M apps/api/src/core-v2/local-routes.ts
+ M apps/desktop/src-tauri/src/lib.rs
+ M apps/web/src/components/SetupGate.tsx
+?? apps/api/src/core-v2/routes.setup-license-lock-candidate.ts
+?? apps/api/src/license/routes.provision-consume-candidate.ts
+?? apps/api/src/license/routes.provision-consume-fixed-candidate.ts
+?? apps/api/src/license/routes.provisioning-recovery.ts
+?? apps/api/src/license/routes.recovery.ts
+?? apps/web/src/App.provision-candidate.tsx
+?? apps/web/src/api/core-v2.provision-candidate.ts
+?? apps/web/src/pages/ProvisionPage.provision-candidate.tsx
+?? docs/CORE_POS_COMPLETE_LICENCE_SYSTEM_FIX_REPORT.txt

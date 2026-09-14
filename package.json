@@ -1,0 +1,38 @@
+{
+  "name": "bimik-cafe",
+  "private": true,
+  "version": "2.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "predev": "npm run build:packages",
+    "dev": "concurrently -k -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w @bimik/api",
+    "dev:web": "npm run dev -w @bimik/web",
+    "dev:local": "npm run dev:local -w @bimik/api",
+    "local:backup": "npm run local:backup -w @bimik/api",
+    "build:sidecar": "npm run build:sidecar -w @bimik/desktop",
+    "build:packages": "npm run build -w @bimik/shared-types && npm run build -w @bimik/validation",
+    "predev:api": "npm run build:packages",
+    "db:migrate": "npm run build:packages && npm run db:migrate -w @bimik/api",
+    "db:normalize-roles": "npm run build:packages && npm run db:normalize-roles -w @bimik/api",
+    "db:backup:verified": "npm run db:backup:verified -w @bimik/api",
+    "db:prepare-production": "npm run db:prepare-production -w @bimik/api --",
+    "uploads:audit": "npm run uploads:audit -w @bimik/api",
+    "build": "npm run build -w @bimik/shared-types && npm run build -w @bimik/validation && npm run build -w @bimik/api && npm run build -w @bimik/web",
+    "typecheck": "npm run build -w @bimik/shared-types && npm run build -w @bimik/validation && npm run typecheck --workspaces --if-present",
+    "test": "npm run build:packages && npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "overrides": {
+    "tar": "^7.5.22"
+  }
+}

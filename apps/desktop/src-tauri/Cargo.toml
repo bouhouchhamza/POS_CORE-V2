@@ -1,0 +1,22 @@
+[package]
+name = "bimik-cafe"
+version = "2.0.8"
+edition = "2021"
+[lib]
+name = "bimik_cafe_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+ed25519-dalek = "2"
+keyring = { version = "3.6.1", default-features = false, features = ["windows-native"] }
+thiserror = "2"
+windows = { version = "0.62", features = ["Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
+windows-core = "0.62"
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"

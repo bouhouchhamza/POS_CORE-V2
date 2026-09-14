@@ -1,0 +1,15 @@
+﻿f559379 (HEAD -> main, origin/main, origin/HEAD) fix: harden licensing and desktop printing readiness
+205465e fix: prevent Arabic login header overlap
+9ae2b07 feat: support permanent offline desktop licensing
+6185eca fix: polish Arabic RTL and translations
+ec28e1c feat: complete multilingual POS experience
+5a79b33 feat: remember business login context
+c5df156 fix: harden multi-tenant login isolation
+cb64113 feat: simplify vendor console and secure admin login
+75e5c43 feat: finalize commercial POS workflows and UX
+6d693db feat: add commercial licensing control plane and desktop enforcement
+7bb9883 feat: complete table QR ordering and stable QR lifecycle
+66ec59b feat: complete universal POS onboarding and business UX
+106e78a fix: finalize Core V2 runtime integration
+d539519 feat: productize Core V2 universal business onboarding
+c35a140 feat: initialize Core POS V2 universal platform

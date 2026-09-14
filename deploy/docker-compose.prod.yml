@@ -1,0 +1,141 @@
+name: bimik-cafe
+
+x-api-environment: &api_environment
+  NODE_ENV: production
+  LICENSE_MODE: production
+  TZ: Africa/Casablanca
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  CONTROL_PLANE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  SAAS_TENANCY_MODE: database_per_tenant
+  SAAS_TENANT_DATABASE_URL_TEMPLATE: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/{database}
+  SAAS_DATABASE_ADMIN_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/postgres
+  SAAS_TENANT_DB_OWNER: ${POSTGRES_USER}
+  JWT_SECRET: ${JWT_SECRET}
+  VENDOR_SESSION_SECRET: ${VENDOR_SESSION_SECRET:-${JWT_SECRET}}
+  VENDOR_ADMIN_USERNAME: ${VENDOR_ADMIN_USERNAME:-admin}
+  VENDOR_ADMIN_PASSWORD_HASH: ${VENDOR_ADMIN_PASSWORD_HASH:-}
+  VENDOR_ADMIN_TOKEN: ${VENDOR_ADMIN_TOKEN:-}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  UPLOAD_DIR: /app/uploads
+  ALLOW_PUBLIC_REGISTRATION: "false"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [private]
+
+  migrate:
+    image: bimik-core-pos-v2-api:release
+    build: { context: .., dockerfile: apps/api/Dockerfile }
+    restart: "no"
+    env_file:
+      - path: ../.env
+        required: false
+      - path: ./.env
+        required: false
+      - path: ./vendor-auth.env
+        required: false
+    environment: *api_environment
+    command: ["node","apps/api/dist/scripts/migrate-runtime.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [private]
+
+  api:
+    container_name: corepos-api
+    image: bimik-core-pos-v2-api:release
+    build: { context: .., dockerfile: apps/api/Dockerfile }
+    restart: unless-stopped
+    env_file:
+      - path: ../.env
+        required: false
+      - path: ./.env
+        required: false
+      - path: ./vendor-auth.env
+        required: false
+    environment: *api_environment
+    secrets:
+      - source: license_signing_private_key
+        target: license_signing_private_key
+        mode: 0444
+    command: ["/bin/sh","-c","export LICENSE_SIGNING_PRIVATE_KEY=\"$$(cat /run/secrets/license_signing_private_key)\"; exec node apps/api/dist/src/server.js"]
+    volumes: [uploads:/app/uploads]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [private]
+
+  web:
+    build: { context: .., dockerfile: apps/web/Dockerfile, args: { VITE_API_URL: /api } }
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [private]
+
+  caddy:
+    container_name: corepos-caddy
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:80"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "caddy_data:/data", "caddy_config:/config"]
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_started }
+    networks:
+      - private
+      - web-network
+
+  backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      CONTROL_PLANE_DB: ${POSTGRES_DB}
+      BACKUP_S3_URI: ${BACKUP_S3_URI}
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION}
+    volumes: ["./postgres/backup.sh:/usr/local/bin/backup.sh:ro", "backup_staging:/backups", "uploads:/uploads:ro"]
+    entrypoint: ["/bin/sh","-c","apk add --no-cache aws-cli coreutils && while true; do /usr/local/bin/backup.sh; sleep 86400; done"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    networks: [private]
+
+secrets:
+  license_signing_private_key:
+    file: ${LICENSE_SIGNING_PRIVATE_KEY_FILE:-./secrets/license-signing-private.pem}
+
+volumes:
+  postgres_data: {}
+  uploads: {}
+  caddy_data: {}
+  caddy_config: {}
+  backup_staging: {}
+
+networks:
+  private:
+    driver: bridge
+  web-network:
+    external: true

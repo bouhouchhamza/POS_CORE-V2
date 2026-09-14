@@ -1,0 +1,72 @@
+V84_CORE_POS_SIGNING_KEY_RUNTIME_DIAGNOSTIC
+
+Timestamp: 2026-09-09T17:12:04Z
+Production host: 195.35.0.63
+API container name/id: core-pos-v2-prod-api-1 / 709a9de9a7ea165cc4b5d742ad66b190a83a3763671d7a2d36af70c40de16320
+Container running: YES
+Container health: healthy
+Actual entrypoint: ["/bin/sh","-ec"]
+Actual command: exports LICENSE_SIGNING_PRIVATE_KEY from /run/secrets/license_signing_private_key, then execs node apps/api/dist/src/server.js
+Startup command exports LICENSE_SIGNING_PRIVATE_KEY: YES
+Secret mount configured: YES (read-only bind mount)
+Container secret exists: YES
+Container secret regular file: YES
+Container secret readable by configured application user: NO
+Container secret non-empty: YES
+Container secret bytes: 119 (verified read-only as container root)
+Container secret SHA-256: 8143d1e0c910fee446623e63f275fe96682793a1bf3d497b4c584996c504da37 (computed read-only as container root)
+Host secret exists: YES
+Host secret bytes: 119
+Host secret SHA-256: 8143d1e0c910fee446623e63f275fe96682793a1bf3d497b4c584996c504da37
+Host/container hashes match: YES
+PID1 LICENSE_SIGNING_PRIVATE_KEY present: YES
+PID1 LICENSE_SIGNING_PRIVATE_KEY non-empty: NO
+
+Relevant sanitized API log findings:
+- Startup reports: cat cannot open /run/secrets/license_signing_private_key: Permission denied.
+- Recent POST /api/vendor/offline-activations/issue requests reached the API.
+- Each captured request failed in the signing path with "Vendor signing key is not configured." (statusCode 503 internally; browser-facing request was reported as HTTP 500).
+- No private key, token, cookie, password, or session credential is included in this report.
+
+Additional ownership evidence:
+- Container configured user: bimik
+- PID1 uid/gid: 100:101
+- Host secret: mode 600, uid 0, gid 0
+- Container-mounted secret: mode 600, uid 0, gid 0
+- Mount: /opt/core-pos-v2-prod/secrets/license-signing-private.pem -> /run/secrets/license_signing_private_key, read-only
+
+Diagnosis:
+CASE B. The intended secret file is mounted, non-empty, and byte-for-byte identical to the host source, but the application user cannot read it. The shell command substitution therefore fails with Permission denied and produces an empty value. The shell continues, exports an empty LICENSE_SIGNING_PRIVATE_KEY, and execs Node. The signing route reads process.env.LICENSE_SIGNING_PRIVATE_KEY, finds it empty, and throws "Vendor signing key is not configured." This establishes the root cause of the signing-key failure without exposing the key.
+
+Recommended next action:
+Do not replace the key, put it in .env, or broaden the host key's 600 permissions. The smallest evidenced fix affects only /opt/core-pos-v2-prod/compose.yml: set the API wrapper user to root, read/export the mounted secret, then immediately exec BusyBox su to launch Node as bimik. A read-only probe confirmed this image's su launches as uid/gid 100:101 and preserves an exported non-secret test variable.
+
+Proposed minimal compose patch (NOT APPLIED):
+  api:
+    user: "0:0"
+    command:
+      - |
+        export LICENSE_SIGNING_PRIVATE_KEY="$$(cat /run/secrets/license_signing_private_key)"
+        exec su -s /bin/sh bimik -c 'exec node apps/api/dist/src/server.js'
+
+Risk:
+- A quoting or privilege-drop error could prevent only the Core API container from starting.
+- The wrapper begins as root, but exec replaces it and Node must be verified as uid/gid 100:101 after recreation.
+- Compose interpolation and multiline PEM preservation must be revalidated from PID1 metadata without printing the value.
+
+Rollback plan:
+- Before editing, make a timestamped root-only backup of /opt/core-pos-v2-prod/compose.yml.
+- If API health or UID checks fail, restore that exact file and recreate only the Core API service from the prior image/config.
+- Do not restart or recreate Cafe, Library, shared Caddy, Core Postgres, or unrelated services.
+
+Validation commands after explicit approval and API-only recreation:
+- docker compose config (inspect only API user/command/secret resolution; redact other environment data)
+- docker compose ps api
+- docker inspect the API container for health, user, entrypoint, and command
+- docker exec API sh -c 'id -u; id -g' (must be 100 and 101)
+- inspect /proc/1/environ for variable presence/non-empty status only; never print its value
+- curl the Core /ready endpoint
+- run the authenticated Vendor Offline Activation issue flow and confirm the signing-key error is gone
+- confirm no secret appears in logs, config output, files, Git, or the API response
+
+FINAL_RESULT=PASS
