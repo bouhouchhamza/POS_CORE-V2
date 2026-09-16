@@ -80,7 +80,11 @@ export function readSessionDeviceCookie(request: FastifyRequest): DeviceCookiePa
   }
 }
 
-function setSessionDeviceCookie(
+export function clearSessionDeviceCookie(reply: FastifyReply) {
+  reply.clearCookie(DEVICE_COOKIE, { path: '/api' });
+}
+
+export function setSessionDeviceCookie(
   reply: FastifyReply,
   installationId: string,
   channel: SessionChannel,
@@ -88,7 +92,7 @@ function setSessionDeviceCookie(
   reply.setCookie(DEVICE_COOKIE, encodeDeviceCookie(installationId, channel), {
     httpOnly: true,
     secure: config.NODE_ENV === 'production',
-    sameSite: config.NODE_ENV === 'production' ? 'strict' : 'lax',
+    sameSite: config.NODE_ENV === 'production' ? 'none' : 'lax',
     path: '/api',
     maxAge: DEVICE_COOKIE_MAX_AGE_SECONDS,
   });

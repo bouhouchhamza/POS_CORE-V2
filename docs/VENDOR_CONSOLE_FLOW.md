@@ -21,13 +21,13 @@ The **Nouveau client** wizard performs one transactional operation:
 4. Choose licence duration: no expiry, 1 month, 3 months, 6 months, 1 year, or custom date.
 5. Create the active Licence using the Plan modules/device limit/offline policy.
 6. Create a cloud Provisioning Code automatically, valid for at most 24 hours and never beyond the licence expiry.
-7. Show the one-time Provisioning Code and Desktop Licence Key clearly as two different credentials.
+7. Show the one-time Provisioning Code. Successful provisioning securely activates that same browser without exposing a second credential.
 
 If the transaction fails, the new onboarding objects are rolled back together.
 
 ## What each credential is for
 - **Provisioning Code (`prov_...`)**: sent to the merchant for `/provision`. It creates/binds the merchant runtime business. It is short-lived and one-time.
-- **Desktop Licence Key**: kept for Desktop/device activation. It is not the `/provision` code.
+- **Manual Activation Code (`act_...`)**: generated only from the advanced activation tools for an existing customer, support recovery, or a separately activated Desktop. It remains short-lived and one-time.
 - **Vendor Admin Token**: server-side/bootstrap only. Never send it to a merchant and never use it as the daily browser login.
 
 ## Simplified navigation

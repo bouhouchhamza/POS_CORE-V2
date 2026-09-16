@@ -1,10 +1,11 @@
 import { offlineProofPayload } from '@bimik/shared-types'
 import { useEffect, useRef, useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import QRCode from 'qrcode'
 import {
   activateOnline,
   activateDevice,
+  activateProvisionedDevice,
   createOfflineRequest,
   getLicenseStatus,
   importOfflineLicense,
@@ -13,6 +14,7 @@ import {
 } from '../api/license'
 import { getApiErrorMessage } from '../utils/format'
 import ErrorMessage from '../components/ErrorMessage'
+import Loading from '../components/Loading'
 import { getSetupStatus } from '../api/core-v2'
 import { useI18n, type Language } from '../i18n'
 
@@ -234,13 +236,23 @@ async function signBrowserDevicePayload(payload: string) {
 
 export default function LicensePage() {
   const { t, language, setLanguage } = useI18n()
-  const [status, setStatus] = useState<LicenseStatus | null>(null)
+  const location = useLocation()
+  const activationReason = (location.state as { activationReason?: string } | null)?.activationReason
+  const reasonStatus:LicenseStatus['status'] =
+    activationReason === 'DEVICE_REVOKED' ? 'device_revoked' :
+    activationReason === 'LICENSE_REVOKED' ? 'revoked' :
+    activationReason === 'LICENSE_EXPIRED' ? 'expired' :
+    activationReason === 'VENDOR_BUSINESS_INACTIVE' ? 'vendor_business_inactive' :
+    activationReason === 'LICENSE_INACTIVE' || activationReason === 'TENANT_SUSPENDED' || activationReason === 'TENANT_INACTIVE' ? 'suspended' :
+    'activation_required'
+  const [status, setStatus] = useState<LicenseStatus | null>({ status: reasonStatus, features: [] })
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [request, setRequest] = useState<unknown>(null)
   const [qr, setQr] = useState('')
   const [configured, setConfigured] = useState(false)
   const [activating, setActivating] = useState(false)
+  const [attemptingProvisionedActivation,setAttemptingProvisionedActivation]=useState(!usesLocalDesktopApi())
   const [redirect, setRedirect] = useState<string | null>(null)
   const activationInFlight = useRef(false)
   const certificate = status?.certificate as Record<string, unknown> | undefined
@@ -279,15 +291,20 @@ export default function LicensePage() {
   useEffect(() => {
     if (usesLocalDesktopApi()) {
       void load().catch((value) => setError(getApiErrorMessage(value)))
+      void getSetupStatus()
+        .then((setup) => setConfigured(setup.configured))
+        .catch(() => undefined)
     } else {
-      setStatus({ status: 'activation_required', features: [] })
+      void activateProvisionedDevice()
+        .then(() => refreshActivatedState())
+        .catch((value) => {
+          const code = (value as { response?: { data?: { code?: unknown } } })?.response?.data?.code
+          if (code !== 'PROVISIONING_ACTIVATION_GRANT_REQUIRED') {
+            setError(getApiErrorMessage(value))
+          }
+        })
+        .finally(() => setAttemptingProvisionedActivation(false))
     }
-    void getSetupStatus()
-      .then((setup) => {
-        setConfigured(setup.configured)
-
-      })
-      .catch(() => undefined)
   }, [])
 
   async function online() {
@@ -475,6 +492,14 @@ export default function LicensePage() {
 
   if (configured && isOperational) {
     return <Navigate to="/login" replace />
+  }
+
+  if (attemptingProvisionedActivation) {
+    return (
+      <main className="auth-page">
+        <Loading label={t('license.activating')} />
+      </main>
+    )
   }
 
   return (

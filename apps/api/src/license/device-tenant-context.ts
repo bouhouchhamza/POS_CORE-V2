@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { config } from '../config.js';
 import type { TenantRecord } from '../saas/tenant-context.js';
+import { clearSessionDeviceCookie } from './session-devices.js';
 
 export const ACTIVATED_DEVICE_COOKIE = 'corepos_activated_device';
 const COOKIE_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -73,8 +74,9 @@ function rowToTenant(row: any): TenantRecord {
 
 /**
  * Resolves the tenant only from a server-signed cookie previously issued
- * after a cryptographically verified device activation/validation. The
- * cookie contains no tenant identifier or database configuration.
+ * after a trusted activation flow (signed device proof or a consumed
+ * provisioning grant). The cookie contains no tenant identifier or database
+ * configuration.
  */
 export async function resolveActivatedDeviceTenant(
   controlPool: pg.Pool,
@@ -85,24 +87,59 @@ export async function resolveActivatedDeviceTenant(
   if (!value) return null;
 
   const row = (await controlPool.query(
-    `select t.id,t.vendor_business_id,t.control_business_id,t.slug,t.database_name,t.status
+    `select
+            d.id device_id,d.status device_status,
+            l.status license_status,l.expires_at license_expires_at,
+            vb.status vendor_business_status,
+            t.id,t.vendor_business_id,t.control_business_id,t.slug,t.database_name,t.status
        from license_devices d
        join licenses l on l.id=d.license_id
        join vendor_businesses vb on vb.id=l.vendor_business_id
-       join saas_tenants t on t.vendor_business_id=vb.id
+       left join saas_tenants t on t.vendor_business_id=vb.id
       where d.id=$1
-        and d.status='active'
-        and l.status='active'
-        and (l.expires_at is null or l.expires_at>now())
-        and vb.status='active'
-        and t.status='active'
       limit 1`,
     [value.deviceId],
   )).rows[0];
 
   if (!row) {
-    if (reply) clearActivatedDeviceCookie(reply);
+    if (reply) {
+      clearActivatedDeviceCookie(reply);
+      clearSessionDeviceCookie(reply);
+    }
     return null;
+  }
+
+  const reject = (message: string, code: string) => {
+    if (reply) {
+      clearActivatedDeviceCookie(reply);
+      clearSessionDeviceCookie(reply);
+    }
+    throw Object.assign(new Error(message), { statusCode: 403, code });
+  };
+
+  if (row.device_status !== 'active') {
+    return reject('This device has been revoked.', 'DEVICE_REVOKED');
+  }
+  if (row.vendor_business_status !== 'active') {
+    return reject('Vendor Business is not active.', 'VENDOR_BUSINESS_INACTIVE');
+  }
+  if (row.license_status !== 'active') {
+    return reject(
+      'License is not active.',
+      row.license_status === 'revoked' ? 'LICENSE_REVOKED' : 'LICENSE_INACTIVE',
+    );
+  }
+  if (row.license_expires_at && Date.parse(row.license_expires_at) <= Date.now()) {
+    return reject('License has expired.', 'LICENSE_EXPIRED');
+  }
+  if (!row.id) {
+    return reject('The licensed business is not provisioned for CorePOS.', 'TENANT_NOT_PROVISIONED');
+  }
+  if (row.status !== 'active') {
+    return reject(
+      'This workspace is not active.',
+      row.status === 'suspended' ? 'TENANT_SUSPENDED' : 'TENANT_INACTIVE',
+    );
   }
 
   return rowToTenant(row);

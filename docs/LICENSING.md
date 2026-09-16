@@ -16,6 +16,8 @@ A code is accepted only once. Successful activation atomically records `consumed
 
 Offline `.posreq` activation does not expose a reusable master key. Each request has a device proof, timestamp and replay nonce; one request cannot be issued twice. The resulting `.poslic` is Vendor-signed and device-bound.
 
+New cloud provisioning does not ask the merchant for a second activation code. A successful `prov_...` transaction creates a short-lived, one-time server-side activation grant bound to its provisioning key, licence, Vendor Business, and tenant. The browser receives only an HttpOnly grant cookie, exchanges it once for the existing activated-device cookie, and then proceeds to employee login. Manual `act_...` activation remains available for existing customers and support recovery.
+
 ## Device accounting
 
 `license_devices.channel` is one of `desktop`, `web`, or `mobile`. Each licence has `max_devices` plus optional `max_desktop_devices`, `max_web_devices`, and `max_mobile_devices`. A new device must satisfy both the total and its channel limit.

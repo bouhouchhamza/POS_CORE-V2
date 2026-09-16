@@ -1763,16 +1763,17 @@ await registerLicenseRoutes(app,{pool:controlPool,operationalPool:pool,authentic
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
   if (error instanceof ZodError) return validation(reply, error);
-  const status =
-    (error as any).statusCode && Number((error as any).statusCode) < 500
-      ? Number((error as any).statusCode)
-      : 500;
+  const explicitStatus = Number((error as any).statusCode);
+  const status = Number.isInteger(explicitStatus) && explicitStatus >= 400 && explicitStatus <= 599
+    ? explicitStatus
+    : 500;
+  const exposesKnownError = status < 500 || (status >= 500 && typeof (error as any).code === 'string' && Number.isInteger(explicitStatus));
   return reply.code(status).send({
     message:
-      status === 500
-        ? "An unexpected error occurred."
-        : (error as Error).message,
-    ...((error as any).code && status < 500
+      exposesKnownError
+        ? (error as Error).message
+        : "An unexpected error occurred.",
+    ...((error as any).code && exposesKnownError
       ? { code: String((error as any).code) }
       : {}),
   });

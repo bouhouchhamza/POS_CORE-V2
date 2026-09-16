@@ -16,7 +16,7 @@ Operational records (users, orders, sales, payments, products, stock, suppliers,
 
 ## Provisioning
 
-The Vendor creates the client, Vendor Business and licence, then issues a one-time cloud provisioning credential. When the customer consumes it, the API creates/migrates the dedicated database, creates the initial business/branch/patron, stores the tenant registry record, binds the licence, and consumes the provisioning credential in a transaction. A consumed provisioning credential cannot create a second workspace.
+The Vendor creates the client, Vendor Business and licence, then issues a one-time cloud provisioning credential. When the customer consumes it, the API creates/migrates the dedicated database, creates the initial business/branch/patron, stores the tenant registry record, binds the licence, and consumes the provisioning credential in a transaction. The same transaction creates a ten-minute, single-use activation grant bound to that provisioning key, licence, Vendor Business, and tenant. Its opaque value is delivered only in a narrowly scoped HttpOnly cookie and is exchanged for the activated-device cookie; it is never exposed in a URL or browser storage. A consumed provisioning credential cannot create a second workspace.
 
 ## Migration safety
 

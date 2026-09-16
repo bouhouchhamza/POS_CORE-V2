@@ -134,6 +134,13 @@
       "when": 1789567200000,
       "tag": "0018_trusted_device_and_public_qr",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789567260000,
+      "tag": "0019_provisioning_activation_grants",
+      "breakpoints": true
     }
   ]
 }

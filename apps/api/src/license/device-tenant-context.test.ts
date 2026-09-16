@@ -17,6 +17,11 @@ test('activated device cookie restores exactly its server-owned tenant and rejec
 
   let deviceActive = true
   const expected = {
+    device_id: '00000000-0000-4000-8000-0000000000dd',
+    device_status: 'active',
+    license_status: 'active',
+    license_expires_at: null,
+    vendor_business_status: 'active',
     id: '00000000-0000-4000-8000-0000000000aa',
     vendor_business_id: '00000000-0000-4000-8000-0000000000bb',
     control_business_id: 42,
@@ -27,7 +32,12 @@ test('activated device cookie restores exactly its server-owned tenant and rejec
   const controlPool = {
     async query(_sql: string, values: unknown[]) {
       assert.deepEqual(values, ['00000000-0000-4000-8000-0000000000dd'])
-      return { rows: deviceActive ? [expected] : [] }
+      return {
+        rows: [{
+          ...expected,
+          device_status: deviceActive ? 'active' : 'revoked',
+        }],
+      }
     },
   }
 
@@ -57,7 +67,7 @@ test('activated device cookie restores exactly its server-owned tenant and rejec
 
   deviceActive = false
   const revoked = await app.inject({ url: '/resolve', headers: { cookie: raw } })
-  assert.equal(revoked.json().tenant, null)
+  assert.equal(revoked.statusCode, 403)
   assert.match(String(revoked.headers['set-cookie']), new RegExp(`^${ACTIVATED_DEVICE_COOKIE}=`))
 
   await app.close()
