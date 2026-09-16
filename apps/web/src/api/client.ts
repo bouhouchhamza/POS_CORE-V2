@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { getWorkspaceSlug } from './tenant'
 
 export const TOKEN_KEY = 'bimik_cafe_token'
 export const USER_KEY = 'bimik_cafe_user'
@@ -107,22 +106,6 @@ export const api = axios.create({
   },
 })
 
-function shouldAttachWorkspace(url: string) {
-  const path = url.split('?')[0]
-  if (path.includes('/public/menu/')) return false
-  if (/(?:^|\/)vendor(?:\/|$)/.test(path)) return false
-  if (/(?:^|\/)provision(?:\/|$)/.test(path)) return false
-  if (/(?:^|\/)license\/(?:device-activate|device-validate)(?:$|\/)/.test(path)) return false
-
-  // The Tauri Desktop talks to its own loopback API and must never inherit a
-  // cloud workspace selected by a browser session.
-  if (/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/api/i.test(apiBaseUrl)) {
-    return false
-  }
-
-  return true
-}
-
 api.interceptors.request.use((config) => {
   const token = accessToken
 
@@ -130,13 +113,9 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`
   }
 
-  const url = String(config.url ?? '')
-  const workspace = getWorkspaceSlug()
-  if (workspace && shouldAttachWorkspace(url)) {
-    config.headers['X-Bimik-Tenant'] = workspace
-  } else {
-    config.headers.delete('X-Bimik-Tenant')
-  }
+  // Tenant selection is server-owned. The activated-device HttpOnly cookie,
+  // a tenant-bound JWT, or an opaque public QR token resolves the database.
+  config.headers.delete('X-Bimik-Tenant')
 
   if (config.data instanceof FormData) config.headers.delete('Content-Type')
 

@@ -3,7 +3,7 @@ import { Banknote, Bike, ChefHat, Coffee, Package, Plus, Printer, Search, Shoppi
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getCategories } from '../api/categories'
 import { getCurrentCashRegister } from '../api/cash-register'
-import { appendOrderItems, createOrder, getBusiness, getOrders, getPublicMenu, getTables, payOrder, type PublicMenuProduct } from '../api/core-v2'
+import { appendOrderItems, createOrder, getOrders, getPublicMenu, getTables, payOrder, type PublicMenuProduct } from '../api/core-v2'
 import { createProduct, getProducts } from '../api/products'
 import { getSale } from '../api/sales'
 import { defaultSettings, getPublicSettings, type AppSettings } from '../api/settings'
@@ -48,7 +48,7 @@ export default function CommandesPage(){
 
   const loadData=useCallback(async()=>{try{setError(null);const canUseTables=hospitality&&features.includes('tables')&&tableRoles.has(role);const[categoryRows,productRows,appSettings,currentRegister,tableRows,orderRows]=await Promise.all([getCategories(),getProducts(),getPublicSettings().catch(()=>defaultSettings),getCurrentCashRegister().catch(()=>null),canUseTables?getTables():Promise.resolve([]),canUseTables?getOrders():Promise.resolve([])]);setCategories(categoryRows);setProducts(productRows);setSettings(appSettings);setRegisterOpen(Boolean(currentRegister));setTables(tableRows);setOrders(orderRows)}catch(value){setError(getApiErrorMessage(value))}finally{setIsLoading(false)}},[features,hospitality,role])
   useEffect(()=>{void loadData()},[loadData])
-  useEffect(()=>{let active=true;async function loadOptions(){if(!selectedTable?.qr_token||!features.includes('qr_menu')){setPublicOptions(new Map());return}try{const currentBusiness=await getBusiness(),menu=await getPublicMenu(currentBusiness.slug,selectedTable.qr_token);if(active)setPublicOptions(new Map(menu.products.map(product=>[product.id,product])))}catch{if(active)setPublicOptions(new Map())}}void loadOptions();return()=>{active=false}},[features,selectedTable?.id,selectedTable?.qr_token])
+  useEffect(()=>{let active=true;async function loadOptions(){if(!selectedTable?.qr_token||!features.includes('qr_menu')){setPublicOptions(new Map());return}try{const menu=await getPublicMenu(selectedTable.qr_token);if(active)setPublicOptions(new Map(menu.products.map(product=>[product.id,product])))}catch{if(active)setPublicOptions(new Map())}}void loadOptions();return()=>{active=false}},[features,selectedTable?.id,selectedTable?.qr_token])
   useEffect(()=>{if(mode&&(mode!=='dine_in'||selectedTableId))window.setTimeout(()=>searchRef.current?.focus(),50)},[mode,selectedTableId])
 
   const activeProducts=useMemo(()=>products.filter(product=>product.is_active),[products])

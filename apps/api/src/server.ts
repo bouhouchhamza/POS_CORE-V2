@@ -92,7 +92,7 @@ await app.register(cors, {
 
   methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 
-  allowedHeaders: ["Accept", "Authorization", "Content-Type", "X-Bimik-Tenant", "X-Bimik-App-Version", "X-Bimik-Device-Channel"],
+  allowedHeaders: ["Accept", "Authorization", "Content-Type", "X-Bimik-App-Version", "X-Bimik-Device-Channel"],
 
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -546,7 +546,7 @@ app.get("/api/auth/login-context", async (req, reply) => {
       data: {
         mode: "cloud",
         profile_picker: false,
-        requires_workspace: true,
+        requires_workspace: false,
         business: null,
       },
     };

@@ -4,6 +4,7 @@ import { Navigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import {
   activateOnline,
+  activateDevice,
   createOfflineRequest,
   getLicenseStatus,
   importOfflineLicense,
@@ -26,9 +27,15 @@ type DeviceMaterial = DeviceIdentity & {
 
 const LEGACY_DEVICE_KEY = 'pos-device-identity'
 const BROWSER_DEVICE_KEY = 'pos-browser-license-identity'
+let browserDeviceMaterial: DeviceMaterial | null = null
 
 const isTauriRuntime = () =>
   '__TAURI_INTERNALS__' in window
+
+const usesLocalDesktopApi = () =>
+  /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/api(?:\/|$)/i.test(
+    String(import.meta.env.VITE_API_URL ?? ''),
+  )
 
 
 async function signDevicePayload(payload: string, desktopOnlyMessage: string) {
@@ -186,48 +193,11 @@ async function deviceIdentity(): Promise<DeviceIdentity> {
     })
   }
 
-  // Browser/cloud mode never persists the private key.
-  const storedRaw = localStorage.getItem(BROWSER_DEVICE_KEY)
-
-  if (storedRaw) {
-    try {
-      const stored = JSON.parse(storedRaw)
-
-      if (validPublicIdentity(stored)) return stored
-    } catch {
-      localStorage.removeItem(BROWSER_DEVICE_KEY)
-    }
-  }
-
-  // Migrate only the non-secret portion of the old browser identity.
-  const legacyRaw = localStorage.getItem(LEGACY_DEVICE_KEY)
-
-  if (legacyRaw) {
-    try {
-      const legacy = JSON.parse(legacyRaw)
-
-      if (validPublicIdentity(legacy)) {
-        const identity: DeviceIdentity = {
-          installation_id: legacy.installation_id,
-          public_key: legacy.public_key,
-        }
-
-        localStorage.setItem(
-          BROWSER_DEVICE_KEY,
-          JSON.stringify(identity),
-        )
-        localStorage.removeItem(LEGACY_DEVICE_KEY)
-
-        return identity
-      }
-    } catch {
-      // Invalid legacy data is discarded below.
-    }
-
-    localStorage.removeItem(LEGACY_DEVICE_KEY)
-  }
-
-  const generated = await generateDeviceMaterial()
+  // Browser activation keeps the private key in memory only. The durable
+  // association is the server-issued HttpOnly cookie; no tenant or licence
+  // secret is written to localStorage.
+  const generated = browserDeviceMaterial ?? await generateDeviceMaterial()
+  browserDeviceMaterial = generated
 
   const identity: DeviceIdentity = {
     installation_id: generated.installation_id,
@@ -240,6 +210,26 @@ async function deviceIdentity(): Promise<DeviceIdentity> {
   )
 
   return identity
+}
+
+async function signBrowserDevicePayload(payload: string) {
+  if (!browserDeviceMaterial) throw new Error('Device identity is unavailable.')
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    JSON.parse(browserDeviceMaterial.private_key),
+    { name: 'Ed25519' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign(
+    { name: 'Ed25519' },
+    privateKey,
+    new TextEncoder().encode(payload),
+  )
+  const bytes = new Uint8Array(signature)
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 
 export default function LicensePage() {
@@ -268,6 +258,13 @@ export default function LicensePage() {
   }
 
   const refreshActivatedState = async () => {
+    if (!usesLocalDesktopApi()) {
+      const setup = await getSetupStatus()
+      setStatus({ status: 'active', features: [] })
+      setConfigured(setup.configured)
+      setRedirect(setup.configured ? '/login' : '/setup')
+      return
+    }
     const [nextStatus, setup] = await Promise.all([
       getLicenseStatus(),
       getSetupStatus(),
@@ -280,7 +277,11 @@ export default function LicensePage() {
   }
 
   useEffect(() => {
-    void load().catch((value) => setError(getApiErrorMessage(value)))
+    if (usesLocalDesktopApi()) {
+      void load().catch((value) => setError(getApiErrorMessage(value)))
+    } else {
+      setStatus({ status: 'activation_required', features: [] })
+    }
     void getSetupStatus()
       .then((setup) => {
         setConfigured(setup.configured)
@@ -322,18 +323,30 @@ export default function LicensePage() {
           t('license.desktopOnly'),
         )
 
-        await activateOnline({
+        const activate = usesLocalDesktopApi() ? activateOnline : activateDevice
+        await activate({
           ...activationPayload,
           device_proof,
         })
       } else {
-        // Web/cloud mode keeps the authenticated merchant flow.
-        await activateOnline({
+        const nonce =
+          crypto.randomUUID().replaceAll('-', '') +
+          crypto.randomUUID().replaceAll('-', '')
+        const requested_at = new Date().toISOString()
+        const activationPayload = {
           license_key: key,
           installation_id: identity.installation_id,
           device_public_key: identity.public_key,
           device_name,
           app_version,
+          nonce,
+          requested_at,
+        }
+        await activateDevice({
+          ...activationPayload,
+          device_proof: await signBrowserDevicePayload(
+            onlineProofPayload(activationPayload),
+          ),
         })
       }
 

@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import crypto from 'node:crypto';
 import type { TenantRecord, TenantStatus } from './tenant-context.js';
 
 const tenantSlugPattern = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
@@ -44,4 +45,20 @@ export async function findTenantByVendorBusinessId(controlPool: pg.Pool, vendorB
   )).rows[0];
 
   return row ? rowToTenant(row) : null;
+}
+
+export async function findTenantByPublicTableToken(controlPool: pg.Pool, token: string) {
+  if (!/^[A-Za-z0-9_-]{32,200}$/.test(token)) return null;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const row = (await controlPool.query(
+    `select t.id,t.vendor_business_id,t.control_business_id,t.slug,t.database_name,t.status,
+            l.table_id
+       from public_table_links l
+       join saas_tenants t on t.id=l.tenant_id
+      where l.token_hash=$1 and l.active=true
+      limit 1`,
+    [tokenHash],
+  )).rows[0];
+
+  return row ? { tenant: rowToTenant(row), tableId: Number(row.table_id) } : null;
 }

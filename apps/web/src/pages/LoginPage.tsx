@@ -6,7 +6,6 @@ import {
 } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import {
-  forgetBusinessContext,
   getLoginContext,
   getLoginProfiles,
   type LoginContext,
@@ -17,12 +16,6 @@ import ErrorMessage from '../components/ErrorMessage'
 import Loading from '../components/Loading'
 import type { LoginProfile } from '../types'
 import { getApiErrorMessage } from '../utils/format'
-import {
-  clearWorkspaceSlug,
-  getWorkspaceSlug,
-  normalizeWorkspaceSlug,
-  setWorkspaceSlug,
-} from '../api/tenant'
 import { useI18n, type Language } from '../i18n'
 
 type LocationState = {
@@ -61,9 +54,6 @@ export default function LoginPage() {
   const [isContextLoading, setIsContextLoading] = useState(true)
   const [isProfilesLoading, setIsProfilesLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isForgettingBusiness, setIsForgettingBusiness] = useState(false)
-  const [workspaceInput, setWorkspaceInput] = useState(() => getWorkspaceSlug() ?? '')
-  const [isWorkspaceSelecting, setIsWorkspaceSelecting] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -72,25 +62,12 @@ export default function LoginPage() {
       try {
         setError(null)
 
-        // Deep links such as /login?workspace=atlas-cafe-a31f7c82 are safe:
-        // the slug is only a routing hint; the server still owns tenant lookup
-        // and all authentication/authorization decisions.
-        if (typeof window !== 'undefined') {
-          const queryWorkspace = new URLSearchParams(window.location.search).get('workspace')
-          const normalized = normalizeWorkspaceSlug(queryWorkspace)
-          if (normalized) {
-            setWorkspaceSlug(normalized)
-            setWorkspaceInput(normalized)
-          }
-        }
-
         const context = await getLoginContext()
         if (!mounted) return
 
         setLoginContext(context)
 
-        if (context.requires_workspace || !context.profile_picker) {
-          // No workspace or fresh/private cloud browser: never enumerate users.
+        if (!context.profile_picker) {
           localStorage.removeItem(LAST_PROFILE_KEY)
           setProfiles([])
           setSelectedProfile(null)
@@ -116,11 +93,10 @@ export default function LoginPage() {
       } catch (err) {
         if (mounted) {
           console.error('Error loading login context:', err)
-          clearWorkspaceSlug()
           setLoginContext({
             mode: 'cloud',
             profile_picker: false,
-            requires_workspace: true,
+            requires_workspace: false,
             business: null,
           })
           setError(t('login.contextError'))
@@ -141,19 +117,18 @@ export default function LoginPage() {
     }
   }, [t])
 
-  const requiresWorkspace = Boolean(loginContext?.requires_workspace)
-  const profilePickerMode = !requiresWorkspace && Boolean(loginContext?.profile_picker)
+  const profilePickerMode = Boolean(loginContext?.profile_picker)
   const rememberedCloudBusiness =
     loginContext?.mode === 'cloud' && profilePickerMode
 
   useEffect(() => {
     if (
       (profilePickerMode && selectedProfile) ||
-      (loginContext?.mode === 'cloud' && !profilePickerMode && !requiresWorkspace)
+      (loginContext?.mode === 'cloud' && !profilePickerMode)
     ) {
       window.setTimeout(() => passwordInputRef.current?.focus(), 0)
     }
-  }, [loginContext?.mode, profilePickerMode, requiresWorkspace, selectedProfile])
+  }, [loginContext?.mode, profilePickerMode, selectedProfile])
 
   if (isLoading || isContextLoading) {
     return (
@@ -178,78 +153,6 @@ export default function LoginPage() {
     setSelectedProfile(null)
     setPassword('')
     setError(null)
-  }
-
-  async function changeBusiness() {
-    setIsForgettingBusiness(true)
-    setError(null)
-
-    try {
-      // Forget while the current tenant header is still present, then clear
-      // the browser routing hint.
-      await forgetBusinessContext()
-      clearWorkspaceSlug()
-      localStorage.removeItem(LAST_PROFILE_KEY)
-      setWorkspaceInput('')
-      setLoginContext({
-        mode: 'cloud',
-        profile_picker: false,
-        requires_workspace: true,
-        business: null,
-      })
-      setProfiles([])
-      setSelectedProfile(null)
-      setEmail('')
-      setPassword('')
-    } catch (err) {
-      setError(getApiErrorMessage(err))
-    } finally {
-      setIsForgettingBusiness(false)
-    }
-  }
-
-  async function chooseWorkspace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const slug = normalizeWorkspaceSlug(workspaceInput)
-    if (!slug) {
-      setError(t('login.workspaceInvalid'))
-      return
-    }
-
-    setIsWorkspaceSelecting(true)
-    setError(null)
-    try {
-      setWorkspaceSlug(slug)
-      const context = await getLoginContext()
-      if (context.requires_workspace) {
-        throw new Error(t('login.workspaceNotFound'))
-      }
-      setWorkspaceInput(slug)
-      setLoginContext(context)
-      setProfiles([])
-      setSelectedProfile(null)
-      localStorage.removeItem(LAST_PROFILE_KEY)
-
-      if (context.profile_picker) {
-        setIsProfilesLoading(true)
-        const data = await getLoginProfiles()
-        const safeProfiles = Array.isArray(data) ? data : []
-        setProfiles(safeProfiles)
-        if (!safeProfiles.length) setError(t('login.noActiveProfiles'))
-      }
-    } catch (err) {
-      clearWorkspaceSlug()
-      setLoginContext({
-        mode: 'cloud',
-        profile_picker: false,
-        requires_workspace: true,
-        business: null,
-      })
-      setError(getApiErrorMessage(err) || t('login.workspaceNotFound'))
-    } finally {
-      setIsProfilesLoading(false)
-      setIsWorkspaceSelecting(false)
-    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -306,11 +209,9 @@ export default function LoginPage() {
               : t('login.title')}
           </h1>
           <p>
-            {requiresWorkspace
-              ? t('login.workspaceChooseSubtitle')
-              : rememberedCloudBusiness
+            {rememberedCloudBusiness
                 ? t('login.rememberedSubtitle')
-                : t('login.workspaceSubtitle')}
+                : t('login.subtitle')}
           </p>
           <div aria-label={t('language.label')} className="login-language" role="group">
             {(['fr','ar','en'] as Language[]).map(item => (
@@ -328,27 +229,6 @@ export default function LoginPage() {
         </div>
 
         <ErrorMessage message={error} />
-
-        {requiresWorkspace ? (
-          <form className="form-grid login-form password-login-form" onSubmit={chooseWorkspace}>
-            <label>
-              {t('login.workspace')}
-              <input
-                autoCapitalize="none"
-                autoComplete="organization"
-                onChange={(event) => setWorkspaceInput(event.target.value.toLowerCase())}
-                placeholder={t('login.workspacePlaceholder')}
-                required
-                spellCheck={false}
-                type="text"
-                value={workspaceInput}
-              />
-            </label>
-            <button className="button login-button" disabled={isWorkspaceSelecting} type="submit">
-              {isWorkspaceSelecting ? t('login.workspaceChecking') : t('login.workspaceContinue')}
-            </button>
-          </form>
-        ) : null}
 
         {profilePickerMode && isProfilesLoading
           ? <Loading label={t('login.loadingProfiles')} />
@@ -377,7 +257,7 @@ export default function LoginPage() {
           </div>
         ) : null}
 
-        {!requiresWorkspace && !profilePickerMode ? (
+        {!profilePickerMode ? (
           <form className="form-grid login-form password-login-form" onSubmit={handleSubmit}>
             <label>
               {t('login.email')}
@@ -448,16 +328,6 @@ export default function LoginPage() {
           </form>
         ) : null}
 
-        {rememberedCloudBusiness ? (
-          <button
-            className="button secondary login-button"
-            disabled={isForgettingBusiness || isSubmitting}
-            onClick={() => void changeBusiness()}
-            type="button"
-          >
-            {isForgettingBusiness ? t('login.changingBusiness') : t('login.changeBusiness')}
-          </button>
-        ) : null}
       </section>
     </main>
   )

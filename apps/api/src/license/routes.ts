@@ -15,6 +15,7 @@ import{assertDeviceSlotAvailable}from'./device-quota.js'
 import{touchSessionDevice}from'./session-devices.js'
 import{effectiveLicenseStatus,readCommercialLicenseState,resolveRuntimeBusinessIdentity}from'./control-plane.js'
 import{issueActivationCode,lockActivationCode,validateActivationCode}from'./activation-codes.js'
+import{setActivatedDeviceCookie}from'./device-tenant-context.js'
 
 type User={
  id:number
@@ -532,6 +533,21 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             await client.query('begin');
             const license = await lockActivationCode(client, input.license_key, 'desktop');
             validateActivationCode(license);
+            if (config.SAAS_TENANCY_MODE === 'database_per_tenant') {
+                const tenant = (await client.query(
+                    `select status from saas_tenants
+                      where vendor_business_id=$1
+                      limit 1
+                      for share`,
+                    [license.vendor_business_id]
+                )).rows[0];
+                if (!tenant || tenant.status !== 'active') {
+                    throw Object.assign(
+                        new Error('The licensed business is not provisioned for CorePOS.'),
+                        { statusCode: 409, code: 'TENANT_NOT_PROVISIONED' }
+                    );
+                }
+            }
             const replay = (await client.query('select 1 from license_activations where license_id=$1 and request_nonce=$2 limit 1', [license.id, input.nonce])).rows[0];
             if (replay)
                 throw Object.assign(new Error('This activation request was already used.'), { statusCode: 409, code: 'ACTIVATION_REPLAY' });
@@ -582,6 +598,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 `One-time Desktop activation code consumed by device ${device.id}`
             ]);
             await client.query('commit');
+            setActivatedDeviceCookie(reply, device.id);
             return reply.code(201).send({ data: signed });
         }
         catch (error) {
@@ -663,6 +680,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             await client.query("insert into license_activations(license_id,device_id,certificate_id,kind,status,request_nonce) values($1,$2,$3,'desktop_validation','approved',$4)", [license.id, device.id, signed.certificate.certificate_id, input.nonce]);
             await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('device','desktop_validation.approve','device',$1,'Desktop certificate revalidated')", [device.id]);
             await client.query('commit');
+            setActivatedDeviceCookie(reply, device.id);
             return { data: signed };
         } catch (error) {
             await client.query('rollback');

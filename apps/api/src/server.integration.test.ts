@@ -345,10 +345,59 @@ test("remembered business context is signed, tenant scoped, survives logout, and
   assert.match(String(forgot.headers["set-cookie"] ?? ""), /bimik_business_context=/);
 });
 
+test("opaque table QR is public, tenant scoped, filters private products, and prices orders server-side", { skip: !enabled }, async () => {
+  const token = await login();
+  const room = await app.inject({
+    method: 'POST',
+    url: '/api/rooms',
+    headers: auth(token),
+    payload: { name: 'Terrasse', sort_order: 0, active: true },
+  });
+  assert.equal(room.statusCode, 201, room.body);
+  const table = await app.inject({
+    method: 'POST',
+    url: '/api/tables',
+    headers: auth(token),
+    payload: { room_id: room.json().data.id, table_number: 'T-1', name: 'Table 1', capacity: 4, status: 'available', active: true },
+  });
+  assert.equal(table.statusCode, 201, table.body);
+  const qrToken = table.json().data.qr_token as string;
+  assert.ok(qrToken.length >= 32);
+
+  await pool.query("update categories set is_public=true where id=1");
+  await pool.query("update products set is_public=true,is_active=true,available=true where id=1");
+  await pool.query("update products set is_public=false,is_active=true,available=true where id=2");
+
+  const menu = await app.inject({ method: 'GET', url: `/api/public/menu/table/${qrToken}` });
+  assert.equal(menu.statusCode, 200, menu.body);
+  assert.equal(menu.json().data.table.id, table.json().data.id);
+  assert.deepEqual(menu.json().data.products.map((product: any) => product.id), [1]);
+  assert.equal('purchase_price' in menu.json().data.products[0], false);
+  assert.equal((await app.inject({ method: 'GET', url: `/api/public/menu/table/${'x'.repeat(43)}` })).statusCode, 404);
+
+  const injected = await app.inject({
+    method: 'POST',
+    url: `/api/public/menu/table/${qrToken}/orders`,
+    payload: { client_id: crypto.randomUUID(), tenantId: 'attacker', table_id: 999, discount: 100, tax: 100, items: [{ product_id: 1, quantity: 1, unit_price: 0 }] },
+  });
+  assert.equal(injected.statusCode, 422, injected.body);
+
+  const created = await app.inject({
+    method: 'POST',
+    url: `/api/public/menu/table/${qrToken}/orders`,
+    payload: { client_id: crypto.randomUUID(), tenantId: 'attacker', table_id: 999, items: [{ product_id: 1, quantity: 2 }] },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().data.business_id, 1);
+  assert.equal(created.json().data.table_id, table.json().data.id);
+  assert.equal(created.json().data.items[0].unit_price, 5);
+  assert.equal(created.json().data.total, 10);
+});
+
 test("refresh tokens rotate, logout revokes them, and missing cookies return 401", { skip: !enabled }, async () => {
   const loggedIn = await app.inject({ method: "POST", url: "/api/login", payload: { email: "patron@test.local", password: "1" } });
   const firstCookie = cookieByName(loggedIn.headers["set-cookie"], "bimik_refresh");
-  const deviceCookie = cookieByName(loggedIn.headers["set-cookie"], "corepos_session_device");
+  const deviceCookie = cookieByName(loggedIn.headers["set-cookie"], "bimik_session_device");
   const refreshed = await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: `${firstCookie}; ${deviceCookie}` } });
   assert.equal(refreshed.statusCode, 200, refreshed.body);
   assert.equal((await app.inject({ method: "POST", url: "/api/auth/refresh", headers: { cookie: firstCookie } })).statusCode, 401);

@@ -2,6 +2,7 @@ import api,{unwrapData}from'./client'
 export type LicenseStatus={status:'development'|'activation_required'|'active'|'legacy'|'suspended'|'expired'|'revoked'|'device_revoked'|'vendor_business_inactive'|'offline_validity_exceeded';features:string[]|'all';business_type?:string|null;expires_at?:string|null;offline_valid_until?:string|null;development?:boolean;certificate?:unknown}
 export const getLicenseStatus=async()=>unwrapData<LicenseStatus>(await api.get('/license/status'))
 export const activateOnline=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/activate',payload))
+export const activateDevice=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/device-activate',payload))
 export const createOfflineRequest=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/offline-request',payload))
 export const importOfflineLicense=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/import',payload))
 export const revalidateLicense=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/revalidate',payload))

@@ -66,4 +66,6 @@ process.env.TZ = config.TZ;
 export const allowedOrigins = config.CORS_ORIGINS
   .split(',')
   .map((value) => value.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .concat(['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'])
+  .filter((value, index, values) => values.indexOf(value) === index);

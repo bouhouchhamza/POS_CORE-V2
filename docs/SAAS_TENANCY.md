@@ -8,7 +8,9 @@ The control-plane PostgreSQL database contains Vendor customers, Vendor Business
 
 With `SAAS_TENANCY_MODE=database_per_tenant`, each provisioned Vendor Business receives one PostgreSQL database. A visible business name such as `Atlas Café` can produce an immutable technical identity such as `atlas-cafe-a31f7c82` and database `corepos_atlas_cafe_a31f7c82`. The UUID suffix prevents collisions and makes renaming the visible business safe.
 
-Client requests never provide a database name. The browser sends only the workspace slug in `X-Bimik-Tenant`; the API resolves that slug through `saas_tenants`, establishes the request tenant context, and then operational DB calls use that resolved database. JWT access tokens contain the tenant ID and are rejected when used against a different workspace.
+Client requests never provide a database name, tenant ID, or workspace slug. Desktop activation creates a registered Vendor device and the API issues a signed HttpOnly activated-device cookie containing only the device reference. On startup the control plane validates that device, its licence and Vendor Business, resolves `saas_tenants`, and only then establishes the operational database context. JWT access tokens contain the resolved tenant ID and are rejected in another tenant context.
+
+Public table QRs contain only a high-entropy table token (`/m/:token`). The control plane stores its SHA-256 hash in `public_table_links`; that binding resolves the tenant database and expected table before any public menu query runs. Internal tenant slugs are not encoded in newly generated QRs.
 
 Operational records (users, orders, sales, payments, products, stock, suppliers, purchases, customers, tables, kitchen data, settings and tenant uploads) stay in that client's database/upload namespace. The control plane may keep a minimal shadow `businesses` row solely for backward-compatible control-plane relationships.
 

@@ -4,7 +4,7 @@ export type SetupStatus={configured:boolean;requires_license_activation?:boolean
 export type ProvisionResolution={vendor_business_name:string;business_type:BusinessType;plan:string|null;allowed_features:FeatureKey[];provisioning_expires_at:string|null;license_expires_at:string|null}
 export type PublicMenuChoice={id:number;name:string;price:number}
 export type PublicMenuProduct={id:number;category_id:number|null;name:string;sale_price:number;image:string|null;available:boolean;variants:PublicMenuChoice[];modifiers:PublicMenuChoice[]}
-export type PublicMenu={business:{name:string;slug:string;currency:string};table:{id:number;name:string;number:string;room:string};categories:Array<{id:number;name:string}>;products:PublicMenuProduct[]}
+export type PublicMenu={business:{name:string;currency:string};table:{id:number;name:string;number:string;room:string};categories:Array<{id:number;name:string;image?:string|null}>;products:PublicMenuProduct[]}
 export const getSetupStatus=async()=>unwrapData<SetupStatus>(await api.get('/setup/status'))
 export const completeSetup=async(payload:unknown)=>unwrapData<unknown>(await api.post('/setup',payload))
 export type ProvisionResult={business?:Business;tenant?:{id:string;slug:string;database_name:string;status:string};replayed?:boolean}
@@ -37,6 +37,6 @@ export const createPurchase=async(payload:unknown)=>unwrapData<Purchase>(await a
 export const receivePurchase=async(id:number)=>unwrapData<Purchase>(await api.post(`/purchases/${id}/receive`))
 export const getPurchase=async(id:number)=>unwrapData<PurchaseDetail>(await api.get(`/purchases/${id}`))
 export const returnPurchase=async(id:number,payload:{purchase_item_id:number;quantity:number;reason:string})=>unwrapData<PurchaseReturn>(await api.post(`/purchases/${id}/returns`,payload))
-export const getPublicMenu=async(slug:string,token:string)=>unwrapData<PublicMenu>(await api.get(`/public/menu/${encodeURIComponent(slug)}/table/${encodeURIComponent(token)}`))
-export const createQrOrder=async(slug:string,token:string,payload:unknown)=>unwrapData<UniversalOrder>(await api.post(`/public/menu/${encodeURIComponent(slug)}/table/${encodeURIComponent(token)}/orders`,payload))
-export const createTableEvent=async(slug:string,token:string,type:'call_waiter'|'request_bill')=>api.post(`/public/menu/${encodeURIComponent(slug)}/table/${encodeURIComponent(token)}/events`,{type})
+export const getPublicMenu=async(token:string)=>unwrapData<PublicMenu>(await api.get(`/public/menu/table/${encodeURIComponent(token)}`))
+export const createQrOrder=async(token:string,payload:unknown)=>unwrapData<UniversalOrder>(await api.post(`/public/menu/table/${encodeURIComponent(token)}/orders`,payload))
+export const createTableEvent=async(token:string,type:'call_waiter'|'request_bill')=>api.post(`/public/menu/table/${encodeURIComponent(token)}/events`,{type})
