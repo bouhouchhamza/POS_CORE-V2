@@ -12,10 +12,18 @@ import{config}from'../config.js'
 import{provisionTenantDatabase,tenantIdentifiers}from'../saas/tenant-provisioning.js'
 import{currentTenant}from'../saas/tenant-context.js'
 import{assertDeviceSlotAvailable}from'./device-quota.js'
-import{touchSessionDevice}from'./session-devices.js'
+import{clearSessionDeviceCookie,sessionChannelForRequest,setSessionDeviceCookie,touchSessionDevice}from'./session-devices.js'
 import{effectiveLicenseStatus,readCommercialLicenseState,resolveRuntimeBusinessIdentity}from'./control-plane.js'
 import{issueActivationCode,lockActivationCode,validateActivationCode}from'./activation-codes.js'
 import{setActivatedDeviceCookie}from'./device-tenant-context.js'
+import{
+ clearProvisioningActivationGrantCookie,
+ issueProvisioningActivationGrant,
+ lockProvisioningActivationGrant,
+ readProvisioningActivationGrantCookie,
+ setProvisioningActivationGrantCookie,
+ validateProvisioningActivationGrant
+}from'./provisioning-activation-grants.js'
 
 type User={
  id:number
@@ -505,6 +513,92 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      }
     )
 
+    app.post('/api/provision/activate-device', {
+        config: { rateLimit: { max: 10, timeWindow: '1 minute' } }
+    }, async (request, reply) => {
+        z.object({ intent: z.literal('activate-provisioned-device') }).strict().parse(request.body);
+        const plaintext = readProvisioningActivationGrantCookie(request);
+        if (!plaintext) {
+            return reply.code(401).send({
+                message: 'No provisioning activation grant is available.',
+                code: 'PROVISIONING_ACTIVATION_GRANT_REQUIRED'
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('begin');
+            const grant = await lockProvisioningActivationGrant(client, plaintext);
+            validateProvisioningActivationGrant(grant);
+
+            const channel = sessionChannelForRequest(request);
+            const installationId = crypto.randomUUID();
+            const publicIdentity = `${channel}-cookie-v1:${installationId}`;
+            const deviceName = String(request.headers['user-agent'] ?? 'CorePOS browser').slice(0, 200);
+            const appVersion = String(request.headers['x-bimik-app-version'] ?? (channel === 'mobile' ? 'pwa' : 'web')).slice(0, 100);
+            const platform = channel === 'mobile' ? 'mobile-web' : 'web';
+
+            await assertDeviceSlotAvailable(client, grant, channel);
+            const device = (await client.query(
+                `insert into license_devices(
+                   license_id,installation_id,device_public_key,device_fingerprint,
+                   device_name,app_version,channel,platform,last_validated_at,last_seen_at
+                 ) values($1,$2,$3,$4,$5,$6,$7,$8,now(),now())
+                 returning *`,
+                [
+                    grant.grant_license_id,
+                    installationId,
+                    publicIdentity,
+                    fingerprint(publicIdentity),
+                    deviceName,
+                    appVersion,
+                    channel,
+                    platform
+                ]
+            )).rows[0];
+
+            const consumed = (await client.query(
+                `update provisioning_activation_grants
+                 set consumed_at=now(),consumed_device_id=$2,updated_at=now()
+                 where id=$1 and consumed_at is null and revoked_at is null and expires_at>now()
+                 returning id`,
+                [grant.grant_id, device.id]
+            )).rows[0];
+            if (!consumed) {
+                throw Object.assign(
+                    new Error('The provisioning activation grant was consumed concurrently.'),
+                    { statusCode: 409, code: 'PROVISIONING_ACTIVATION_GRANT_REPLAY' }
+                );
+            }
+
+            await client.query(
+                `insert into license_activations(
+                   license_id,device_id,kind,status,request_nonce
+                 ) values($1,$2,'provisioning_grant','approved',$3)`,
+                [grant.grant_license_id, device.id, grant.grant_id]
+            );
+            await client.query(
+                `insert into license_audit_logs(actor,action,entity_type,entity_id,description)
+                 values('system','provisioning_activation.consume','device',$1,$2)`,
+                [device.id, `Provisioning activation grant consumed for tenant ${grant.grant_tenant_id}`]
+            );
+            await client.query('commit');
+
+            setActivatedDeviceCookie(reply, device.id);
+            setSessionDeviceCookie(reply, installationId, channel);
+            clearProvisioningActivationGrantCookie(reply);
+            return reply.code(201).send({ data: { activated: true } });
+        } catch (error) {
+            await client.query('rollback');
+            if (Number((error as any)?.statusCode) < 500) {
+                clearProvisioningActivationGrantCookie(reply);
+            }
+            throw error;
+        } finally {
+            client.release();
+        }
+    });
+
     app.post('/api/license/device-activate', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
         // Compatibility note: the field is still named `license_key` because
         // shipped Desktop clients already send it. Its value is now a
@@ -598,6 +692,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 `One-time Desktop activation code consumed by device ${device.id}`
             ]);
             await client.query('commit');
+            clearSessionDeviceCookie(reply);
             setActivatedDeviceCookie(reply, device.id);
             return reply.code(201).send({ data: signed });
         }
@@ -1019,7 +1114,9 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      message:
       'License is not active.',
      code:
-      'LICENSE_INACTIVE'
+      credential.license_status==='revoked'
+       ?'LICENSE_REVOKED'
+       :'LICENSE_INACTIVE'
     })
    }
 
@@ -1276,7 +1373,9 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       message:
        'License is not active.',
       code:
-       'LICENSE_INACTIVE'
+       credential.license_status==='revoked'
+        ?'LICENSE_REVOKED'
+        :'LICENSE_INACTIVE'
      })
     }
 
@@ -1391,6 +1490,12 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
        }
       },
       passwordHash:password
+     }).catch(error=>{
+      if(Number((error as any)?.statusCode)>=400)throw error
+      throw Object.assign(
+       new Error('Tenant provisioning failed. The provisioning code was not consumed.'),
+       {statusCode:503,code:'TENANT_PROVISIONING_FAILED',cause:error}
+      )
      })
 
      const ids=tenantIdentifiers(
@@ -1464,7 +1569,22 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       ]
      )
 
+     const activationGrant=await issueProvisioningActivationGrant({
+      client,
+      provisioningKeyId:String(credential.provisioning_key_id),
+      licenseId:String(credential.license_id),
+      vendorBusinessId:String(credential.vendor_business_id),
+      tenantId:String(tenant.id),
+      licenseExpiresAt:credential.license_expires_at
+     })
+
      await client.query('commit')
+
+     setProvisioningActivationGrantCookie(
+      reply,
+      activationGrant.plaintext,
+      activationGrant.expiresAt
+     )
 
      return reply.code(201).send({
       data:{
@@ -1804,15 +1924,6 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      ]
     )).rows[0]
 
-    const desktopActivation=await issueActivationCode({
-     client,
-     licenseId:license.id,
-     channel:'desktop',
-     licenseExpiresAt:license.expires_at,
-     ttlHours:24,
-     notes:'Automatic one-time Desktop activation code from onboarding'
-    })
-
     const normalProvisioningExpiry=now.getTime()+24*60*60*1000
     const provisioningExpiryMs=licenseExpiry?Math.min(normalProvisioningExpiry,licenseExpiry.getTime()):normalProvisioningExpiry
     if(provisioningExpiryMs<=now.getTime())throw Object.assign(new Error('Provisioning expiration is invalid.'),{statusCode:422,code:'PROVISIONING_EXPIRY_INVALID'})
@@ -1827,7 +1938,6 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'customer.create','customer',$2,$3)",[actor,customer.id,'Customer '+customer.name+' created by onboarding'])
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'business.create','vendor_business',$2,$3)",[actor,business.id,'Vendor Business '+business.name+' created by onboarding'])
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'license.create','license',$2,$3)",[actor,license.id,'Licence created by onboarding'])
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'activation_code.issue','activation_code',$2,$3)",[actor,desktopActivation.row.id,'One-time Desktop activation code issued by onboarding'])
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'provisioning_key.issue','provisioning_key',$2,$3)",[actor,provisioning.id,'Provisioning credential issued by onboarding'])
 
     await client.query('commit')
@@ -1836,10 +1946,6 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      business,
      plan:{id:plan.id,code:plan.code,name:plan.name},
      license:{...license,customer_name:customer.name,vendor_business_name:business.name,plan_name:plan.name,plan_code:plan.code},
-     // Backward-compatible field name used by the current Vendor UI. This is
-     // a one-time activation code, NOT the internal commercial master secret.
-     license_key:desktopActivation.plaintext,
-     activation:{...desktopActivation.row,activation_code:desktopActivation.plaintext},
      provisioning:{...provisioning,provisioning_key:provisioningKey}
     }})
    }catch(error){

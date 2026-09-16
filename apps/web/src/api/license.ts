@@ -3,6 +3,7 @@ export type LicenseStatus={status:'development'|'activation_required'|'active'|'
 export const getLicenseStatus=async()=>unwrapData<LicenseStatus>(await api.get('/license/status'))
 export const activateOnline=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/activate',payload))
 export const activateDevice=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/device-activate',payload))
+export const activateProvisionedDevice=async()=>unwrapData<{activated:boolean}>(await api.post('/provision/activate-device',{intent:'activate-provisioned-device'}))
 export const createOfflineRequest=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/offline-request',payload))
 export const importOfflineLicense=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/import',payload))
 export const revalidateLicense=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/revalidate',payload))

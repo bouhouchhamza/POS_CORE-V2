@@ -124,7 +124,7 @@ export default function ProvisionPage(){
         }
       })
 
-      navigate('/login',{replace:true})
+      navigate('/activation',{replace:true})
     }
     catch(value){
       setError(
