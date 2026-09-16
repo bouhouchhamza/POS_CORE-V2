@@ -221,14 +221,69 @@ export async function provisionTenantDatabase(input: {
       )).rows[0];
 
       if (existing) {
-        const branch = (await client.query(
+        let branch = (await client.query(
           'select * from branches where business_id=$1 order by id limit 1',
           [existing.id],
         )).rows[0] ?? null;
-        const patron = (await client.query(
+
+        if (!branch) {
+          branch = (await client.query(
+            `insert into branches(business_id,name,code,address,phone)
+             values($1,'Principal','MAIN',$2,$3)
+             returning *`,
+            [existing.id, input.setup.business.address ?? null, input.setup.business.phone ?? null],
+          )).rows[0];
+        }
+
+        const normalizedEmail = input.setup.admin.email.toLowerCase();
+        let patron = (await client.query(
           "select id,name,email,role,is_active from users where business_id=$1 and role in ('patron','owner') order by id limit 1",
           [existing.id],
         )).rows[0] ?? null;
+
+        if (patron && String(patron.email).toLowerCase() !== normalizedEmail) {
+          throw Object.assign(new Error('Tenant owner does not match the provisioning request.'), {
+            statusCode: 409,
+            code: 'TENANT_OWNER_MISMATCH',
+          });
+        }
+
+        if (!patron) {
+          const existingUser = (await client.query(
+            'select * from users where business_id=$1 and lower(email)=$2 limit 1 for update',
+            [existing.id, normalizedEmail],
+          )).rows[0] ?? null;
+
+          patron = existingUser
+            ? (await client.query(
+                `update users
+                 set branch_id=$1,name=$2,password=$3,
+                     role='patron',is_active=true,updated_at=now()
+                 where id=$4
+                 returning id,name,email,role,is_active`,
+                [branch.id, input.setup.admin.name, input.passwordHash, existingUser.id],
+              )).rows[0]
+            : (await client.query(
+                `insert into users(business_id,branch_id,name,email,password,role,is_active)
+                 values($1,$2,$3,$4,$5,'patron',true)
+                 returning id,name,email,role,is_active`,
+                [
+                  existing.id,
+                  branch.id,
+                  input.setup.admin.name,
+                  normalizedEmail,
+                  input.passwordHash,
+                ],
+              )).rows[0];
+        }
+
+        if (!patron) {
+          throw Object.assign(new Error('Tenant owner bootstrap failed.'), {
+            statusCode: 500,
+            code: 'TENANT_OWNER_BOOTSTRAP_FAILED',
+          });
+        }
+
         await client.query('commit');
         return { ...identifiers, schemaVersion, business: existing, branch, patron, replayed: true };
       }
@@ -283,6 +338,13 @@ export async function provisionTenantDatabase(input: {
           input.passwordHash,
         ],
       )).rows[0];
+
+      if (!patron) {
+        throw Object.assign(new Error('Tenant owner bootstrap failed.'), {
+          statusCode: 500,
+          code: 'TENANT_OWNER_BOOTSTRAP_FAILED',
+        });
+      }
 
       await client.query('commit');
       return { ...identifiers, schemaVersion, business, branch, patron, replayed: false };
