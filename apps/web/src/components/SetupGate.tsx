@@ -2,7 +2,6 @@ import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { getSetupStatus } from '../api/core-v2'
-import { clearWorkspaceSlug } from '../api/tenant'
 import { useI18n } from '../i18n'
 import Loading from './Loading'
 
@@ -27,7 +26,7 @@ export default function SetupGate() {
   const [setup, setSetup] = useState<SetupState | null>(null)
 
   useEffect(() => {
-    if (location.pathname.startsWith('/menu/')) {
+    if (location.pathname.startsWith('/menu/') || location.pathname.startsWith('/m/')) {
       setSetup({ configured: true })
       return
     }
@@ -41,13 +40,13 @@ export default function SetupGate() {
         if (
           code === 'TENANT_NOT_FOUND' ||
           code === 'TENANT_CONTEXT_REQUIRED' ||
-          code === 'TENANT_CONTEXT_MISMATCH'
+          code === 'TENANT_CONTEXT_MISMATCH' ||
+          code === 'DEVICE_ACTIVATION_REQUIRED'
         ) {
-          clearWorkspaceSlug()
           setSetup({
             configured: false,
-            requires_tenant_selection: true,
-            requires_license_activation: false,
+            requires_tenant_selection: false,
+            requires_license_activation: true,
             requires_provisioning: false,
           })
           return
@@ -74,15 +73,6 @@ export default function SetupGate() {
 
   const configured = setup.configured
 
-  // Cloud database-per-tenant mode needs a workspace before any operational
-  // route can be resolved. LoginPage owns workspace selection.
-  if (
-    setup.requires_tenant_selection &&
-    location.pathname !== '/login'
-  ) {
-    return <Navigate to="/login" replace />
-  }
-
   if (
     !configured &&
     setup.requires_provisioning &&
@@ -94,7 +84,6 @@ export default function SetupGate() {
   // Licence enforcement applies even to an already configured Desktop
   // business. Existing local data must never bypass activation.
   if (
-    !setup.requires_tenant_selection &&
     setup.requires_license_activation &&
     location.pathname !== '/activation'
   ) {
@@ -114,7 +103,6 @@ export default function SetupGate() {
   }
 
   if (
-    !setup.requires_tenant_selection &&
     !configured &&
     !setup.requires_license_activation &&
     location.pathname !== '/setup'

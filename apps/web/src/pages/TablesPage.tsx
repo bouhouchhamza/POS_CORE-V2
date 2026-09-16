@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { Banknote, Bell, Copy, ExternalLink, Plus, Printer, QrCode, RefreshCw, ReceiptText, X } from 'lucide-react'
-import { createRoom, createTable, getBusiness, getOrders, getRooms, getTableEvents, getTables, payOrder, resolveTableEvent, rotateTableQr, type TableEvent } from '../api/core-v2'
+import { createRoom, createTable, getOrders, getRooms, getTableEvents, getTables, payOrder, resolveTableEvent, rotateTableQr, type TableEvent } from '../api/core-v2'
 import { getSale } from '../api/sales'
 import { useAuth } from '../auth/useAuth'
 import RestaurantReceipt from '../components/RestaurantReceipt'
 import type { RestaurantTable, Room, Sale, UniversalOrder } from '../types'
 import { useI18n } from '../i18n'
+import { publicMenuUrl } from '../public-menu-url'
 
 type TableQr={url:string;image:string;table:RestaurantTable}
 export default function TablesPage(){
@@ -22,7 +23,7 @@ export default function TablesPage(){
   useEffect(()=>{void load();const timer=setInterval(()=>void load(),8000);return()=>clearInterval(timer)},[load])
   async function addRoom(event:FormEvent){event.preventDefault();await createRoom({name:roomName,sort_order:rooms.length,active:true});setRoomName('');await load()}
   async function addTable(event:FormEvent){event.preventDefault();const table=await createTable({room_id:roomId,table_number:number,name:tableName,capacity:4,status:'available',active:true});setTableName('');setNumber('');setShowSetup(false);await load();await openQr(table)}
-  async function ensureQr(table:RestaurantTable){if(!table.qr_token)throw new Error('QR indisponible.');const business=await getBusiness(),url=`${location.origin}/menu/${business.slug}/table/${table.qr_token}`,image=await QRCode.toDataURL(url,{width:520,margin:2});return{table,url,image}}
+  async function ensureQr(table:RestaurantTable){if(!table.qr_token)throw new Error('QR indisponible.');const url=publicMenuUrl(table.qr_token,import.meta.env.VITE_PUBLIC_APP_URL,location.origin),image=await QRCode.toDataURL(url,{width:520,margin:2});if(import.meta.env.DEV)console.info('[CorePOS QR]',url);return{table,url,image}}
   async function openQr(table:RestaurantTable){setQr(await ensureQr(table))}
   async function regenerateQr(){if(!qr||!confirm(t('tables.regenerateConfirm')))return;const table={...qr.table,...await rotateTableQr(qr.table.id)};await load();setQr(await ensureQr(table))}
   async function printAll(){const generated=[];for(const table of tables)generated.push(await ensureQr(table));setBulkQrs(generated);setTimeout(()=>print(),100)}

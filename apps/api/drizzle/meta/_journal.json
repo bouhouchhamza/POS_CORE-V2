@@ -127,6 +127,13 @@
       "when": 1789398000000,
       "tag": "0017_allow_lifetime_commercial_licenses",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789567200000,
+      "tag": "0018_trusted_device_and_public_qr",
+      "breakpoints": true
     }
   ]
 }

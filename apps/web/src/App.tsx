@@ -43,6 +43,7 @@ export default function App() {
       <Route path="/activation" element={<LicensePage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/menu/:slug/table/:token" element={<PublicMenuPage />} />
+      <Route path="/m/:token" element={<PublicMenuPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>

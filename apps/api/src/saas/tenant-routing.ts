@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { config } from '../config.js';
 import { runWithTenant, type TenantRecord } from './tenant-context.js';
-import { findTenantBySlug, normalizeTenantSlug } from './tenant-registry.js';
+import { resolveActivatedDeviceTenant } from '../license/device-tenant-context.js';
+import { findTenantByPublicTableToken, findTenantBySlug, normalizeTenantSlug } from './tenant-registry.js';
 
 const tenantOptionalRoutes = new Set([
   '/api/auth/login-context',
@@ -32,6 +33,16 @@ function publicMenuTenantSlug(pathname: string) {
   }
 }
 
+function publicMenuToken(pathname: string) {
+  const match = pathname.match(/^\/api\/public\/menu\/table\/([^/]+)(?:\/|$)/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 function headerTenantSlug(request: FastifyRequest) {
   const raw = request.headers[config.SAAS_TENANT_HEADER];
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -55,13 +66,41 @@ export async function registerTenantRouting(app: FastifyInstance, controlPool: p
 
     const explicitSlug = headerTenantSlug(request);
     const publicSlug = publicMenuTenantSlug(pathname);
-    const slug = explicitSlug ?? publicSlug;
+    const token = publicMenuToken(pathname);
+    const publicTokenContext = token
+      ? await findTenantByPublicTableToken(controlPool, token)
+      : null;
+    const deviceTenant = !publicSlug && !token
+      ? await resolveActivatedDeviceTenant(controlPool, request, reply)
+      : null;
 
-    if (!slug) {
+    // Legacy slug URLs remain readable while printed QRs age out, but normal
+    // employee routing never trusts X-Bimik-Tenant. An authenticated JWT may
+    // still carry a matching tenant id during a rolling deployment.
+    let authenticatedTenant: TenantRecord | null = null;
+    if (explicitSlug && request.headers.authorization) {
+      try {
+        await request.jwtVerify();
+        const candidate = await findTenantBySlug(controlPool, explicitSlug);
+        if (candidate && (request.user as any).tid === candidate.id) authenticatedTenant = candidate;
+      } catch {
+        authenticatedTenant = null;
+      }
+    }
+
+    const tenant = publicTokenContext?.tenant
+      ?? deviceTenant
+      ?? authenticatedTenant
+      ?? (publicSlug ? await findTenantBySlug(controlPool, publicSlug) : null);
+
+    if (!tenant) {
       if (tenantOptionalRoutes.has(pathname)) return;
+      if (token) {
+        return reply.code(404).send({ message: 'Menu not found.', code: 'PUBLIC_MENU_NOT_FOUND' });
+      }
       return reply.code(400).send({
-        message: 'Workspace is required.',
-        code: 'TENANT_CONTEXT_REQUIRED',
+        message: 'Device activation is required.',
+        code: 'DEVICE_ACTIVATION_REQUIRED',
       });
     }
 
@@ -72,17 +111,10 @@ export async function registerTenantRouting(app: FastifyInstance, controlPool: p
       });
     }
 
-    const tenant = await findTenantBySlug(controlPool, slug);
-    if (!tenant) {
-      return reply.code(404).send({
-        message: 'Workspace not found.',
-        code: 'TENANT_NOT_FOUND',
-      });
-    }
-
     if (tenant.status !== 'active') return inactiveTenantReply(reply, tenant);
 
     (request as any).bimikTenant = tenant;
+    if (publicTokenContext) (request as any).bimikPublicTableId = publicTokenContext.tableId;
   });
 
   // Enter the AsyncLocalStorage context before all route-specific preHandlers

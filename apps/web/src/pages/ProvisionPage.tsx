@@ -6,7 +6,6 @@ import type {BusinessType,FeatureKey} from '../types'
 import { getApiErrorMessage } from '../utils/format'
 import {recommendedModules} from '../components/businessTypeConfig'
 import {useI18n,type Language} from '../i18n'
-import {setWorkspaceSlug} from '../api/tenant'
 
 const modules:FeatureKey[]=['pos','inventory','barcode','suppliers','purchases','customers','tables','qr_menu','kitchen','takeaway','delivery','reservations','product_variants','modifiers','weighted_products','expiry_tracking']
 
@@ -104,7 +103,7 @@ export default function ProvisionPage(){
     setError(null)
 
     try{
-      const provisioned=await provisionBusiness({
+      await provisionBusiness({
         provisioning_key:
           provisioningKey.trim(),
 
@@ -125,16 +124,7 @@ export default function ProvisionPage(){
         }
       })
 
-      if(provisioned.tenant?.slug){
-        setWorkspaceSlug(provisioned.tenant.slug)
-      }
-
-      navigate(
-        provisioned.tenant?.slug
-          ?`/login?workspace=${encodeURIComponent(provisioned.tenant.slug)}`
-          :'/login',
-        {replace:true}
-      )
+      navigate('/login',{replace:true})
     }
     catch(value){
       setError(
