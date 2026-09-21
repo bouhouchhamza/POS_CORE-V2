@@ -1,50 +1,53 @@
-# Core POS V2 - Vendor Console flow
+# CorePOS Vendor Console flow
 
-## Goal
-The Vendor Console is the commercial control plane. Merchant users never need the vendor admin token.
+## Information architecture
 
-## Normal vendor login
-1. Open `/Vendor`.
-2. Enter the configured vendor username and password.
-3. The API verifies the Argon2 password hash stored server-side.
-4. The API creates a signed, HttpOnly, Secure vendor session cookie.
-5. The browser does not store the vendor admin token.
+The normal Vendor Console has five commercial areas:
 
-`VENDOR_ADMIN_TOKEN` remains a bootstrap/emergency API credential only. It is not part of the normal UI flow.
-
-## New customer flow
-The **Nouveau client** wizard performs one transactional operation:
-
-1. Create Vendor Client.
-2. Create Vendor Business.
-3. Select an active Plan.
-4. Choose licence duration: no expiry, 1 month, 3 months, 6 months, 1 year, or custom date.
-5. Create the active Licence using the Plan modules/device limit/offline policy.
-6. Create a one-time Desktop activation code in the form `CP-XXXX-XXXX-XXXX-XXXX`.
-7. Show only the customer-facing CP code card: business, device usage, licence status, and copy/regenerate/disable/view-device actions.
-
-If a dedicated workspace has not yet been created, the console retains a separate **Configuration technique** action. It exposes the one-time provisioning credential only in that explicit internal/bootstrap view; it is never presented as an alternative customer activation code.
-
-If the transaction fails, the new onboarding objects are rolled back together.
-
-## What each credential is for
-- **Activation Code (`CP-XXXX-XXXX-XXXX-XXXX`)**: the normal customer credential. It is displayed once, is short-lived and one-time, and is stored only as a SHA-256 hash. Regeneration replaces unused codes only; it never deactivates existing devices.
-- **Provisioning Code (`prov_...`)**: an internal initial-workspace/bootstrap or recovery credential. It creates/binds the merchant runtime business and is not a normal device activation credential.
-- **Legacy Activation Code (`act_...`)**: retained for shipped-client and support compatibility; it is not the default Vendor Console credential.
-- **Vendor Admin Token**: server-side/bootstrap only. Never send it to a merchant and never use it as the daily browser login.
-
-## Simplified navigation
-Normal navigation is limited to:
 - Dashboard
-- Clients
+- Businesses
 - Licences
-- Appareils
-- Avance
+- Devices
+- Administration: plans, activation-code history, activations, and audit
 
-Technical views (Businesses, Plans & Modules, provisioning history, activations, offline activation, audit) live under **Avance**.
+“Business” is a CorePOS subscriber/business. It is distinct from a retail customer managed by that Business inside the POS. Tenant, workspace, database, grant, and hash terminology does not appear in normal workflows.
 
-## Licence expiry
-Vendor chooses a business-friendly duration. No raw date is required unless **Date personnalisee** is selected.
+## Create Business
 
-## Provisioning expiry
-The Vendor does not type this manually. The console chooses 24 hours automatically, capped by licence expiry.
+**New business** is the primary action on Dashboard and Businesses. The Vendor provides only business/commercial information: identity and regional defaults, contact, owner account, plan, and licence duration.
+
+After submit, CorePOS prepares infrastructure internally. The console shows either:
+
+- **Ready for activation** — next action: **Generate activation code**.
+- **Preparation needs attention** — action: **Retry preparation**.
+
+Retry continues the existing recipe; it does not create another Business, tenant, owner, licence, or activation code. No provisioning credential is displayed.
+
+## Business details
+
+Each Business has one details screen:
+
+- Overview: contact, licence summary, device usage, creation date.
+- Licence: commercial status, quota, and code-generation action when ready.
+- Devices: activated device metadata and supported revoke action.
+- Activity: safe commercial labels for recorded activity.
+
+The Business list includes name, commercial status, readiness, plan, device usage, search, details, and only contextual actions. Failed preparation exposes retry; ready Business exposes activation-code generation.
+
+## Activation-code issuance
+
+Generating a code opens one show-once card containing Business, `CP-XXXX-XXXX-XXXX-XXXX`, device usage, licence status, and Copy/Regenerate/Done actions. The console never retrieves an old plaintext code because only its hash is stored. Regeneration explains that unused codes are revoked while activated devices remain active.
+
+## Licence and device management
+
+Licences show plan, localized status, applicable expiry, quota, and device usage. Supported suspend/reactivate actions are contextual. Devices show Business, device name/channel/platform, status, and meaningful last activity; revoke requires confirmation. The UI does not invent unsupported device-management controls.
+
+## Empty, loading, and responsive states
+
+Businesses, licences, devices, and activity have intentional empty states. Pending actions disable their controls and show one localized result message. French, English, and Arabic are supported; Arabic uses RTL layout while activation codes remain isolated LTR.
+
+At narrow widths navigation becomes a compact grid, forms are one column, actions wrap, dialogs fit the viewport, activation-code actions stack, and tables remain in controlled horizontal containers.
+
+## Internal recovery compatibility
+
+Historical provisioning-key and provisioning-grant tooling is intentionally absent from normal navigation. It is an operator-only legacy-recovery capability requiring `VENDOR_ADMIN_TOKEN`, not a daily Vendor Console password session, customer activation, or Business creation step.

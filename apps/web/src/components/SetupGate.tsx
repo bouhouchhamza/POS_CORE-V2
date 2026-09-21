@@ -1,17 +1,10 @@
 import axios from 'axios'
 import { useEffect, useState } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
-import { getSetupStatus } from '../api/core-v2'
+import { getSetupStatus, type LifecycleState, type SetupStatus } from '../api/core-v2'
 import { useI18n } from '../i18n'
+import { routeForLifecycle } from '../lifecycle-routing'
 import Loading from './Loading'
-
-type SetupState = {
-  configured: boolean
-  requires_license_activation?: boolean
-  requires_provisioning?: boolean
-  requires_tenant_selection?: boolean
-  activation_reason?: string
-}
 
 function apiErrorCode(error: unknown) {
   if (!axios.isAxiosError(error)) return null
@@ -21,119 +14,75 @@ function apiErrorCode(error: unknown) {
   return typeof code === 'string' ? code : null
 }
 
+function fallbackStatus(error: unknown): SetupStatus {
+  const code = apiErrorCode(error)
+  if (code === 'DEVICE_ACTIVATION_REQUIRED') {
+    return { state: 'READY_FOR_ACTIVATION', configured: false, business: null }
+  }
+  if (code) {
+    return { state: 'BLOCKED', configured: false, business: null, reason: code }
+  }
+  return { state: 'BLOCKED', configured: false, business: null, reason: 'STATUS_UNAVAILABLE' }
+}
+
+function LifecycleNotice({ state }: { state: LifecycleState }) {
+  const { t } = useI18n()
+  const key = state === 'PROVISIONING'
+    ? 'provisioning'
+    : state === 'PROVISIONING_FAILED'
+      ? 'failed'
+      : state === 'BLOCKED'
+        ? 'blocked'
+        : 'unavailable'
+
+  return (
+    <main className="auth-page">
+      <section className="login-card">
+        <div className="login-brand">
+          <span className="brand-mark">CP</span>
+          <div><strong>CorePOS</strong></div>
+        </div>
+        <div className="login-copy">
+          <h1>{t(`lifecycle.${key}.title`)}</h1>
+          <p>{t(`lifecycle.${key}.message`)}</p>
+        </div>
+      </section>
+    </main>
+  )
+}
+
 export default function SetupGate() {
   const { t } = useI18n()
   const location = useLocation()
-  const [setup, setSetup] = useState<SetupState | null>(null)
+  const [setup, setSetup] = useState<SetupStatus | null>(null)
 
   useEffect(() => {
     if (location.pathname.startsWith('/menu/') || location.pathname.startsWith('/m/')) {
-      setSetup({ configured: true })
+      setSetup({ state: 'READY', configured: true, business: null })
       return
     }
 
+    let active = true
     setSetup(null)
-
     void getSetupStatus()
-      .then(setSetup)
-      .catch((error) => {
-        const code = apiErrorCode(error)
-        if (
-          code === 'TENANT_NOT_FOUND' ||
-          code === 'TENANT_NOT_PROVISIONED' ||
-          code === 'TENANT_CONTEXT_REQUIRED' ||
-          code === 'TENANT_CONTEXT_MISMATCH' ||
-          code === 'TENANT_SUSPENDED' ||
-          code === 'TENANT_INACTIVE' ||
-          code === 'DEVICE_ACTIVATION_REQUIRED' ||
-          code === 'DEVICE_REVOKED' ||
-          code === 'LICENSE_REVOKED' ||
-          code === 'LICENSE_INACTIVE' ||
-          code === 'LICENSE_EXPIRED' ||
-          code === 'VENDOR_BUSINESS_INACTIVE'
-        ) {
-          setSetup({
-            configured: false,
-            requires_tenant_selection: false,
-            requires_license_activation: true,
-            requires_provisioning: false,
-            activation_reason: code ?? undefined,
-          })
-          return
-        }
-
-        // Licensing must fail closed. A transient API failure must never make
-        // an already configured Desktop installation bypass activation.
-        setSetup({
-          configured: false,
-          requires_license_activation: true,
-          requires_provisioning: false,
-          requires_tenant_selection: false,
-        })
-      })
+      .then((status) => { if (active) setSetup(status) })
+      .catch((error) => { if (active) setSetup(fallbackStatus(error)) })
+    return () => { active = false }
   }, [location.pathname])
 
+  function refreshSetup() {
+    setSetup(null)
+    void getSetupStatus()
+      .then(setSetup)
+      .catch((error) => setSetup(fallbackStatus(error)))
+  }
+
   if (setup === null) {
-    return (
-      <main className="auth-page">
-        <Loading label={t('app.initializing')} />
-      </main>
-    )
+    return <main className="auth-page"><Loading label={t('app.initializing')} /></main>
   }
 
-  const configured = setup.configured
-
-  if (
-    !configured &&
-    setup.requires_provisioning &&
-    location.pathname !== '/provision'
-  ) {
-    return <Navigate to="/provision" replace />
-  }
-
-  // Licence enforcement applies even to an already configured Desktop
-  // business. Existing local data must never bypass activation.
-  if (
-    setup.requires_license_activation &&
-    location.pathname !== '/activation'
-  ) {
-    return <Navigate to="/activation" replace state={{ activationReason: setup.activation_reason }} />
-  }
-
-  if (
-    location.pathname === '/activation' &&
-    !setup.requires_license_activation
-  ) {
-    return (
-      <Navigate
-        to={configured ? '/login' : '/setup'}
-        replace
-      />
-    )
-  }
-
-  if (
-    !configured &&
-    !setup.requires_license_activation &&
-    location.pathname !== '/setup'
-  ) {
-    return <Navigate to="/setup" replace />
-  }
-
-  if (configured && location.pathname === '/setup') {
-    return <Navigate to="/login" replace />
-  }
-
-  return (
-    <Outlet
-      context={{
-        refreshSetup: () =>
-          setSetup((current) => ({
-            ...(current ?? {}),
-            configured: true,
-            requires_tenant_selection: false,
-          })),
-      }}
-    />
-  )
+  const route = routeForLifecycle(setup.state, location.pathname)
+  if (route.kind === 'redirect') return <Navigate to={route.to} replace />
+  if (route.kind === 'notice') return <LifecycleNotice state={setup.state} />
+  return <Outlet context={{ refreshSetup }} />
 }

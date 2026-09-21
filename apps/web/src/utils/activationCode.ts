@@ -62,6 +62,7 @@ export function activationErrorMessage(
     ACTIVATION_REQUEST_STALE: 'license.error.retry',
     ACTIVATION_REPLAY: 'license.error.alreadyActivated',
     TENANT_NOT_PROVISIONED: 'license.error.workspaceUnavailable',
+    BUSINESS_NOT_READY_FOR_ACTIVATION: 'license.error.workspaceUnavailable',
     VENDOR_BUSINESS_INACTIVE: 'license.error.disabled',
     ACTIVATION_SERVER_UNAVAILABLE: 'license.error.serverUnavailable',
     LICENSE_SERVER_UNAVAILABLE: 'license.error.serverUnavailable',

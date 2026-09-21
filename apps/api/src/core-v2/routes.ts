@@ -25,14 +25,55 @@ const money=(value:number)=>Math.round((value+Number.EPSILON)*100)/100;
 const id=z.coerce.number().int().positive();
 
 export async function registerCoreV2Routes(app:FastifyInstance,{pool,controlPool,authenticate,resolveUser}:Dependencies){
-  app.get('/api/setup/status',async()=>{
-    if(config.SAAS_TENANCY_MODE==='database_per_tenant'&&!currentTenant()){
-      return {data:{configured:false,requires_provisioning:false,requires_license_activation:true,requires_tenant_selection:false,business:null}};
+  app.get('/api/setup/status',async(request)=>{
+    const development=process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production';
+    const tenant=currentTenant();
+    let authenticated=false;
+    if(tenant&&request.headers.authorization){
+      try{
+        await request.jwtVerify();
+        const user=await resolveUser(request);
+        authenticated=Boolean(user&&request.user.tid===tenant.id);
+      }catch{
+        authenticated=false;
+      }
     }
+
+    if(config.SAAS_TENANCY_MODE==='database_per_tenant'){
+      if(!tenant){
+        return {data:{
+          state:development?'SETUP_REQUIRED':'READY_FOR_ACTIVATION',
+          configured:false,
+          requires_provisioning:false,
+          requires_license_activation:!development,
+          requires_tenant_selection:false,
+          business:null
+        }};
+      }
+      const result=await pool.query('select b.id,b.name,b.slug,b.logo,b.business_type from businesses b order by b.id limit 1');
+      return {data:{
+        state:authenticated?'READY':'DEVICE_ACTIVATED',
+        configured:Boolean(result.rows[0]),
+        requires_provisioning:false,
+        requires_license_activation:false,
+        requires_tenant_selection:false,
+        business:result.rows[0]??null
+      }};
+    }
+
     const result=await pool.query('select b.id,b.name,b.slug,b.logo,b.business_type from businesses b order by b.id limit 1');
     const configured=Boolean(result.rows[0]);
-    const development=process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production';
-    return {data:{configured,requires_provisioning:config.SAAS_TENANCY_MODE==='shared'&&!configured&&!development,requires_tenant_selection:false,business:result.rows[0]??null}};
+    const state=!configured
+      ?(development?'SETUP_REQUIRED':'READY_FOR_ACTIVATION')
+      :(authenticated?'READY':'DEVICE_ACTIVATED');
+    return {data:{
+      state,
+      configured,
+      requires_provisioning:false,
+      requires_license_activation:state==='READY_FOR_ACTIVATION',
+      requires_tenant_selection:false,
+      business:result.rows[0]??null
+    }};
   });
   app.post('/api/setup',{config:{rateLimit:{max:5,timeWindow:'1 minute'}}},async(request,reply)=>{const development=process.env.LICENSE_MODE==='development'&&process.env.NODE_ENV!=='production';if(!development)return reply.code(409).send({message:'Vendor provisioning is required.',code:'PROVISIONING_REQUIRED'});const input=businessSetupSchema.parse(request.body),client=await pool.connect();try{await client.query('begin');await client.query('lock table businesses in exclusive mode');if((await client.query('select 1 from businesses limit 1')).rowCount){await client.query('rollback');return reply.code(409).send({message:'Business setup is already complete.'})}const slugBase=input.business.name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'business';const business=(await client.query('insert into businesses(name,slug,business_type,logo,currency,locale,timezone) values($1,$2,$3,$4,$5,$6,$7) returning *',[input.business.name,slugBase,input.business.business_type,input.business.logo??null,input.business.currency.toUpperCase(),input.business.locale,input.business.timezone])).rows[0];const branch=(await client.query("insert into branches(business_id,name,code,address,phone) values($1,'Principal','MAIN',$2,$3) returning *",[business.id,input.business.address??null,input.business.phone??null])).rows[0];for(const feature of new Set(input.enabled_features))await client.query('insert into business_features(business_id,feature) values($1,$2)',[business.id,feature]);const password=await argon2.hash(input.admin.password);const owner=(await client.query("insert into users(business_id,branch_id,name,email,password,role,is_active) values($1,$2,$3,$4,$5,'owner',true) returning id,name,email,role,is_active",[business.id,branch.id,input.admin.name,input.admin.email.toLowerCase(),password])).rows[0];await client.query('commit');return reply.code(201).send({data:{business,branch,owner}})}catch(error){await client.query('rollback');throw error}finally{client.release()}});
   async function context(request:FastifyRequest,reply:FastifyReply,permission?:Permission,feature?:FeatureKey){

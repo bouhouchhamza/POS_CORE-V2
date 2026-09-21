@@ -1,33 +1,59 @@
-# Core POS V2 commercial licensing
+# CorePOS commercial licensing
 
-The commercial hierarchy is **Vendor Client -> Vendor Business -> renewable Licence -> registered devices -> merchant workspace**. Merchant users are tenant users; Vendor administration remains in the control plane.
+CorePOS has one customer licensing journey:
 
-## Commercial expiration
+1. A Vendor creates the Business and selects its commercial plan.
+2. CorePOS provisions the Business internally and creates its commercial licence.
+3. When the Business is ready, the Vendor generates one CP activation code.
+4. The customer opens `/activation`, enters that code, activates the device, then signs in.
 
-Every commercial licence has a non-null `expires_at`. New licences default to one year when no duration is supplied. Vendor onboarding offers 1 month, 3 months, 6 months, 1 year, or a custom future date. Renewal always creates a new future expiration; there is no new "without expiration" commercial licence.
+Customers do not receive a provisioning key, activation grant, tenant name, database name, or reusable commercial secret.
 
-Migration `0016_require_commercial_license_expiry.sql` gives any legacy null-expiry licence one transition year from migration time and then makes `licenses.expires_at` mandatory. The signed Desktop certificate also contains the commercial expiration, so `offline_validity_days = null` means "no periodic online deadline", **not** "commercial licence never expires".
+## Authoritative lifecycle
 
-## One-time Desktop activation
+The server computes a single lifecycle state. The web client does not combine historical setup booleans to guess a route.
 
-The commercial licence secret is internal and is never handed to the customer as a reusable activation key. Desktop uses a short-lived one-time activation code in the form `CP-XXXX-XXXX-XXXX-XXXX`, stored server-side only as SHA-256 (`license_activation_codes`). Its 16-character payload is drawn with rejection sampling from an unambiguous 31-character alphabet, giving about 79 bits of entropy. It is random, non-sequential, and independent of customer, business, tenant, licence, and device identifiers. Default validity is 24 hours, capped at the commercial licence expiration.
+| State | Meaning | Normal browser outcome |
+| --- | --- | --- |
+| `PROVISIONING` | CorePOS is preparing the internally created Business. | Non-actionable preparation notice. |
+| `PROVISIONING_FAILED` | Internal preparation needs a Vendor retry. | Non-actionable notice; Vendor retries from Business. |
+| `READY_FOR_ACTIVATION` | Workspace, active commercial licence, and valid quota are ready. | `/activation` |
+| `DEVICE_ACTIVATED` | Device is activated; no merchant user is authenticated. | `/login` |
+| `READY` | Device and merchant session are valid. | Application dashboard/route. |
+| `BLOCKED` | Business, licence, or device is unavailable. | Localized blocked notice. |
+| `SETUP_REQUIRED` | Development/local-only first setup. | `/setup` |
 
-A code is accepted only once. Complete CP codes are case-folded and separator-normalized; opaque legacy `act_...` credentials retain their historical trim-only matching. Successful activation atomically records `consumed_at` and the exact `consumed_device_id`. A consumed, revoked, expired, wrong-channel, inactive-business, or expired-licence code is rejected. Device activation still requires the signed Ed25519 device proof, so possession of a code alone is insufficient to impersonate another installation. Regeneration revokes only unused codes and never revokes or deletes an already activated device.
+`GET /api/setup/status` returns this state. Old boolean fields remain response compatibility only and must not drive new routing.
 
-Offline `.posreq` activation does not expose a reusable master key. Each request has a device proof, timestamp and replay nonce; one request cannot be issued twice. The resulting `.poslic` is Vendor-signed and device-bound.
+## Customer activation code
 
-The normal customer route is `/activation`: it posts the CP code and signed device proof to `/api/license/device-activate`. CorePOS Desktop’s local relay posts the same proof to that endpoint and persists the returned certificate. Offline `.posreq` / `.poslic` activation remains a secondary, device-bound Ed25519-signed path.
+The only normal customer credential is `CP-XXXX-XXXX-XXXX-XXXX`.
 
-Cloud provisioning is a separate, one-time workspace-bootstrap/recovery operation, not a normal activation alternative. A successful `prov_...` transaction creates a short-lived, one-time server-side activation grant bound to its provisioning key, licence, Vendor Business, and tenant. Only the successful bootstrap screen exchanges that scoped HttpOnly grant for the activated-device cookie; `/activation` never probes the grant endpoint. Legacy `act_...` activation remains available for existing customers and support recovery.
+- Its 16-character payload uses cryptographic randomness with rejection sampling from `23456789ABCDEFGHJKMNPQRSTUVWXYZ`: 31 unambiguous characters and about 79 bits of entropy.
+- It is non-sequential and independent of customer, Business, tenant, licence, and device identifiers.
+- Only its SHA-256 hash is persisted in `license_activation_codes`; plaintext exists only in the issuance response.
+- Complete CP codes safely case-fold and normalize spaces/hyphens. Opaque legacy `act_...` credentials retain trim-only matching, preserving existing hashes.
+- The unique hash index is the final uniqueness authority. Codes are one-time, channel-scoped, audited, rate-limited, and short lived (24 hours by default, never past commercial expiry).
+- Regeneration revokes only unused live codes. It never revokes or deactivates an already activated device.
 
-## Device accounting
+Browser activation uses exactly one hosted endpoint: `POST /api/license/device-activate`. The desktop local relay may expose `/api/license/activate`; it forwards the same signed proof to the canonical control-plane endpoint and persists the returned certificate. It is not a second hosted activation flow.
 
-`license_devices.channel` is one of `desktop`, `web`, or `mobile`. Each licence has `max_devices` plus optional `max_desktop_devices`, `max_web_devices`, and `max_mobile_devices`. A new device must satisfy both the total and its channel limit.
+UI error classification uses machine codes, never HTTP status alone. `ACTIVATION_CODE_INVALID` and `DEVICE_LIMIT_REACHED`, including when returned as HTTP 409, remain on `/activation` and never invoke provisioning recovery.
 
-Desktop uses its cryptographic installation identity. Browser/PWA sessions use a server-signed HttpOnly device cookie and cannot choose arbitrary installation IDs. Native mobile login support uses a signed device key proof. Revoking a device prevents subsequent validation/session refresh and frees its active slot; a replacement Desktop receives a new one-time activation code.
+## Device, certificate, and offline security
 
-## Access enforcement
+Online activation requires a signed device proof and atomically binds the code to a registered device. Total and channel quotas apply. Replay returns an explicit used/already-activated state rather than creating a new device.
 
-Effective access is the intersection of licence entitlements, enabled business modules, and authenticated role permissions. Operational writes require an active Vendor Business and an active, unexpired licence. Licensing never deletes merchant data.
+CorePOS keeps its Ed25519-signed, device-bound certificate model. Offline `.posreq` / `.poslic` activation remains a signed, nonce-protected secondary path. It does not expose a reusable licence secret or weaken online replay protection. Trusted-device behavior and public-QR tenant resolution remain server-authoritative.
 
-A physically disconnected device cannot learn an early remote suspension or revocation until it reconnects. It can still enforce the expiration and offline deadline already present in its signed certificate. This is an unavoidable property of true offline operation.
+## Internal and legacy provisioning
+
+Tenant provisioning is Vendor-initiated infrastructure. For a new Business, CorePOS persists an internal replay-safe recipe, creates/migrates the tenant database where required, bootstraps owner/default data, creates the commercial licence, binds the control-plane shadow, records audit events, and only then makes the Business ready for activation.
+
+Historical `/api/provision` and `/api/provision/activate-device` grant exchange remain only for explicitly enabled legacy recovery. `/provision` requires both `VITE_ENABLE_LEGACY_PROVISIONING_RECOVERY=true` and `?legacy-recovery=1`; it is absent from normal navigation. Provisioning-key management requires the internal bootstrap-token credential, not a normal Vendor Console session. `/activation` never probes the grant endpoint.
+
+## Migration and deployment
+
+Migration `0020_vendor_business_lifecycle.sql` adds `vendor_business_provisioning`. It does not modify or delete existing Business, tenant, licence, device, certificate, activation-code, or provisioning-grant rows. It stores an Argon2 owner-password hash and an internal setup recipe, never plaintext customer credentials.
+
+Apply this control-plane migration before deploying code that creates new Vendor Businesses. Keep it when a new workflow record exists; do not drop the table as a routine rollback.

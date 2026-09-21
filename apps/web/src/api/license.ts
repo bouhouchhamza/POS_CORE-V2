@@ -19,11 +19,12 @@ export const revalidateLicense=async(payload:unknown)=>unwrapData<unknown>(await
 const vendorConfig={withCredentials:true}
 function vendorError(value:unknown){
  const candidate=value as {response?:{data?:{message?:unknown;code?:unknown}};message?:unknown}
- const serverMessage=candidate?.response?.data?.message
  const code=candidate?.response?.data?.code
- const fallback=typeof candidate?.message==='string'?candidate.message:'Operation impossible.'
- const message=typeof serverMessage==='string'?serverMessage:fallback
- return new Error(typeof code==='string'?`${message} (${code})`:message)
+ // Vendor screens use their own contextual, localized copy. Do not surface
+ // raw control-plane implementation errors or opaque machine codes there.
+ const known=typeof code==='string'?code:''
+ if(known==='BUSINESS_NOT_READY_FOR_ACTIVATION')return new Error('BUSINESS_NOT_READY_FOR_ACTIVATION')
+ return new Error('VENDOR_OPERATION_FAILED')
 }
 async function vendorCall<T>(operation:()=>Promise<{data:unknown}>){
  try{return unwrapData<T>(await operation())}catch(value){throw vendorError(value)}

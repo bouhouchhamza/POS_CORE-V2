@@ -10,6 +10,8 @@ import{fingerprint,licenseKeyHash,signCertificate,type LicenseCertificate}from'.
 import{activationRequestIsFresh}from'./policy.js'
 import{config}from'../config.js'
 import{provisionTenantDatabase,tenantIdentifiers}from'../saas/tenant-provisioning.js'
+import{provisionVendorBusiness,readVendorBusinessLifecycle}from'../saas/vendor-business-provisioning.js'
+import{commercialLifecycle}from'./lifecycle.js'
 import{currentTenant}from'../saas/tenant-context.js'
 import{assertDeviceSlotAvailable}from'./device-quota.js'
 import{clearSessionDeviceCookie,sessionChannelForRequest,setSessionDeviceCookie,touchSessionDevice}from'./session-devices.js'
@@ -155,6 +157,20 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         if(!passwordConfigured&&!tokenConfigured)return reply.code(503).send({message:'Vendor administration is not configured.',code:'VENDOR_AUTH_NOT_CONFIGURED'});
         return reply.code(401).send({message:'Vendor authentication required.'});
     };
+    // Provisioning credentials are an operator-only compatibility tool. A
+    // normal Vendor Console session can manage businesses and activation
+    // codes, but cannot expose or mint a customer bootstrap credential.
+    const vendorInternalRecovery=async(request:FastifyRequest,reply:FastifyReply)=>{
+        await vendor(request,reply);
+        if(reply.sent)return;
+        const admin=(request as FastifyRequest & {vendorAdmin?:{auth?:unknown}}).vendorAdmin;
+        if(admin?.auth!=='token'){
+            return reply.code(403).send({
+                message:'This recovery operation requires an internal operator credential.',
+                code:'INTERNAL_RECOVERY_REQUIRED'
+            });
+        }
+    };
     app.post('/api/vendor/auth/login',{config:{rateLimit:{max:process.env.NODE_ENV==='test'?1000:5,timeWindow:'1 minute'}}},async(request,reply)=>{
         const input=z.object({username:z.string().trim().min(1).max(120),password:z.string().min(1).max(512)}).parse(request.body);
         const configuredUsernames=[
@@ -295,8 +311,11 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      }
     )
 
+    // Compatibility-only merchant maintenance route. New hosted and browser
+    // activation has exactly one public endpoint: /api/license/device-activate.
+    // The desktop sidecar retains its own local /api/license/activate relay.
     app.post(
-     '/api/license/activate',
+     '/api/internal/license/activate-legacy',
      {preHandler:merchant},
      async(request,reply)=>{
       const user=(request as any).merchant as User
@@ -862,55 +881,40 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     })
     app.get('/api/vendor/customers', { preHandler: vendor }, async () => ({ data: (await pool.query('select * from license_customers order by created_at desc')).rows }));
     app.post('/api/vendor/customers', { preHandler: vendor }, async (request, reply) => { const input = z.object({ name: z.string().min(1), email: z.string().email().nullable().optional(), phone: z.string().max(80).nullable().optional(), notes: z.string().max(1000).nullable().optional() }).parse(request.body), row = (await pool.query('insert into license_customers(name,email,phone,notes) values($1,$2,$3,$4) returning *', [input.name, input.email ?? null, input.phone ?? null, input.notes ?? null])).rows[0]; await pool.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','customer.create','customer',$1,$2)", [row.id, `Customer ${row.name} created`]); return reply.code(201).send({ data: row }); });
-    app.get('/api/vendor/businesses',{preHandler:vendor},async()=>({
-        data:(await pool.query(
-            `select vb.*,c.name customer_name,
+    app.get('/api/vendor/businesses',{preHandler:vendor},async()=>{
+        const rows=(await pool.query(
+            `select vb.id,vb.name,vb.business_type,vb.status,vb.notes,vb.created_at,vb.updated_at,
+              c.name customer_name,c.email customer_email,c.phone customer_phone,
+              l.id license_id,l.status license_status,l.expires_at license_expires_at,
+              l.max_devices,l.max_desktop_devices,l.max_web_devices,l.max_mobile_devices,
+              p.name plan_name,p.code plan_code,
+              (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active') active_devices,
               (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id,
-              (select count(*)::int from licenses l where l.vendor_business_id=vb.id) license_count,
-              t.id tenant_id,t.slug tenant_slug,t.database_name tenant_database_name,t.status tenant_status,t.schema_version tenant_schema_version
+              t.status tenant_status,
+              recipe.last_error_code provisioning_error_code,
+              recipe.attempts provisioning_attempts
              from vendor_businesses vb
              join license_customers c on c.id=vb.customer_id
+             left join lateral (
+               select * from licenses where vendor_business_id=vb.id
+               order by issued_at desc,created_at desc limit 1
+             ) l on true
+             left join license_plans p on p.id=l.plan_id
              left join saas_tenants t on t.vendor_business_id=vb.id
+             left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id
              order by vb.created_at desc`
-        )).rows
-    }));
+        )).rows;
+        return {data:rows.map(row=>{
+            const lifecycle=commercialLifecycle(row,config.SAAS_TENANCY_MODE);
+            return {...row,lifecycle_state:lifecycle.state,readiness_reason:lifecycle.reason};
+        })};
+    });
 
-    app.post('/api/vendor/businesses',{preHandler:vendor},async(request,reply)=>{
-        const input=z.object({
-            customer_id:z.string().uuid(),
-            name:z.string().min(1).max(255),
-            business_type:businessType,
-            status:z.enum(['active','suspended','closed']).optional(),
-            notes:z.string().max(1000).nullable().optional()
-        }).parse(request.body);
-
-        const customer=(await pool.query(
-            'select id from license_customers where id=$1',
-            [input.customer_id]
-        )).rows[0];
-
-        if(!customer)
-            return reply.code(404).send({
-                message:'Vendor Client not found.'
-            });
-
-        const row=(await pool.query(
-            "insert into vendor_businesses(customer_id,name,business_type,status,notes) values($1,$2,$3,$4,$5) returning *",
-            [
-                input.customer_id,
-                input.name,
-                input.business_type,
-                input.status??'active',
-                input.notes??null
-            ]
-        )).rows[0];
-
-        await pool.query(
-            "insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','business.create','vendor_business',$1,$2)",
-            [row.id,'Vendor Business '+row.name+' created']
-        );
-
-        return reply.code(201).send({data:row});
+    app.post('/api/vendor/businesses',{preHandler:vendor},async(_request,reply)=>{
+        return reply.code(409).send({
+            message:'Create businesses through the commercial business workflow so CorePOS can provision them internally.',
+            code:'BUSINESS_CREATION_REQUIRES_COMMERCIAL_DETAILS'
+        });
     });
 
     app.put('/api/vendor/businesses/:id',{preHandler:vendor},async(request,reply)=>{
@@ -1868,7 +1872,9 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
    }
   })
 
-  // COREPOS_VENDOR_SIMPLE_ONBOARDING_V1
+  // Normal commercial onboarding: the Vendor supplies business and owner
+  // details once; CorePOS provisions infrastructure internally. No customer
+  // provisioning key or activation code is created here.
   app.post('/api/vendor/onboarding',{preHandler:vendor},async(request,reply)=>{
    const input=z.object({
     customer:z.object({
@@ -1880,7 +1886,18 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     business:z.object({
      name:z.string().trim().min(1).max(255),
      business_type:businessType,
+     logo:z.string().max(2_000_000).nullable().optional(),
+     currency:z.string().trim().length(3).default('MAD'),
+     locale:z.string().trim().min(2).max(16).default('fr-MA'),
+     timezone:z.string().trim().min(2).max(80).default('Africa/Casablanca'),
+     address:z.string().max(1000).nullable().optional(),
+     phone:z.string().max(80).nullable().optional(),
      notes:z.string().max(1000).nullable().optional()
+    }),
+    owner:z.object({
+     name:z.string().trim().min(1).max(255),
+     email:z.string().email(),
+     password:z.string().min(8).max(512)
     }),
     plan_id:z.string().uuid(),
     duration:z.enum(['lifetime','1_month','3_months','6_months','1_year','custom']).default('1_year'),
@@ -1901,86 +1918,83 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
    }
    if(licenseExpiry&&(!Number.isFinite(licenseExpiry.getTime())||licenseExpiry.getTime()<=now.getTime()))return reply.code(422).send({message:'License expiration must be in the future.',code:'LICENSE_EXPIRY_INVALID'})
 
+   const actor=(request as any).vendorAdmin?.username??'vendor'
+   const passwordHash=await argon2.hash(input.owner.password)
    const client=await pool.connect()
+   let customer:Record<string,unknown>
+   let business:Record<string,unknown>
+   let plan:Record<string,unknown>
    try{
     await client.query('begin')
-    const plan=(await client.query('select * from license_plans where id=$1 and active=true for share',[input.plan_id])).rows[0]
+    plan=(await client.query('select * from license_plans where id=$1 and active=true for share',[input.plan_id])).rows[0]
     if(!plan)throw Object.assign(new Error('Active plan not found.'),{statusCode:422,code:'PLAN_NOT_FOUND'})
     const planFeatures=Array.isArray(plan.features)?plan.features:[]
     if(!planFeatures.length)throw Object.assign(new Error('The selected plan has no modules.'),{statusCode:422,code:'PLAN_FEATURES_EMPTY'})
 
-    const customer=(await client.query(
+    customer=(await client.query(
      'insert into license_customers(name,email,phone,notes) values($1,$2,$3,$4) returning *',
      [input.customer.name,input.customer.email??null,input.customer.phone??null,input.customer.notes??null]
     )).rows[0]
-
-    const business=(await client.query(
+    business=(await client.query(
      "insert into vendor_businesses(customer_id,name,business_type,status,notes) values($1,$2,$3,'active',$4) returning *",
      [customer.id,input.business.name,input.business.business_type,input.business.notes??null]
     )).rows[0]
-
-    const licenseKey=crypto.randomBytes(32).toString('base64url')
-    const license=(await client.query(
-     `insert into licenses(
-       customer_id,vendor_business_id,plan_id,key_hash,status,business_type,allowed_features,
-       max_devices,max_desktop_devices,max_web_devices,max_mobile_devices,
-       expires_at,offline_validity_days,notes
-      ) values($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
-     [
-      customer.id,business.id,plan.id,licenseKeyHash(licenseKey),business.business_type,
-      JSON.stringify(planFeatures),Number(plan.default_device_limit??1),
-      plan.default_desktop_device_limit??null,plan.default_web_device_limit??null,
-      plan.default_mobile_device_limit??null,licenseExpiry?.toISOString()??null,
+    const recipe={
+     business:{
+      name:input.business.name,business_type:input.business.business_type,logo:input.business.logo??null,
+      currency:input.business.currency.toUpperCase(),locale:input.business.locale,timezone:input.business.timezone,
+      address:input.business.address??null,phone:input.business.phone??input.customer.phone??null
+     },
+     enabled_features:planFeatures,
+     admin:{name:input.owner.name,email:input.owner.email}
+    }
+    await client.query(
+     `insert into vendor_business_provisioning(
+       vendor_business_id,setup,owner_password_hash,plan_id,license_expires_at,offline_validity_days,notes
+      ) values($1,$2,$3,$4,$5,$6,$7)`,
+     [business.id,JSON.stringify(recipe),passwordHash,plan.id,licenseExpiry?.toISOString()??null,
       input.offline_validity_days===undefined?plan.offline_validity_days:input.offline_validity_days,
-      'Created by simplified Vendor onboarding'
-     ]
-    )).rows[0]
-
-    const desktopActivation=await issueActivationCode({
-     client,
-     licenseId:license.id,
-     channel:'desktop',
-     licenseExpiresAt:license.expires_at,
-     ttlHours:24,
-     notes:'Automatic one-time Desktop activation code from onboarding'
-    })
-
-    const normalProvisioningExpiry=now.getTime()+24*60*60*1000
-    const provisioningExpiryMs=licenseExpiry?Math.min(normalProvisioningExpiry,licenseExpiry.getTime()):normalProvisioningExpiry
-    if(provisioningExpiryMs<=now.getTime())throw Object.assign(new Error('Provisioning expiration is invalid.'),{statusCode:422,code:'PROVISIONING_EXPIRY_INVALID'})
-    const provisioningKey='prov_'+crypto.randomBytes(32).toString('base64url')
-    const provisioning=(await client.query(`
-     insert into license_provisioning_keys(license_id,key_hash,key_hint,channel,expires_at,notes)
-     values($1,$2,$3,'cloud',$4,$5)
-     returning id,license_id,key_hint,channel,expires_at,consumed_at,consumed_business_id,revoked_at,notes,created_at,updated_at
-    `,[license.id,licenseKeyHash(provisioningKey),provisioningKey.slice(-8),new Date(provisioningExpiryMs).toISOString(),'Automatic 24h onboarding code'])).rows[0]
-
-    const actor=(request as any).vendorAdmin?.username??'vendor'
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'customer.create','customer',$2,$3)",[actor,customer.id,'Customer '+customer.name+' created by onboarding'])
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'business.create','vendor_business',$2,$3)",[actor,business.id,'Vendor Business '+business.name+' created by onboarding'])
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'license.create','license',$2,$3)",[actor,license.id,'Licence created by onboarding'])
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'provisioning_key.issue','provisioning_key',$2,$3)",[actor,provisioning.id,'Provisioning credential issued by onboarding'])
-    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'activation_code.issue','activation_code',$2,$3)",[actor,desktopActivation.row.id,'One-time Desktop activation code issued by onboarding'])
-
+      'Created by Vendor business workflow']
+    )
+    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'customer.create','customer',$2,$3)",[actor,customer.id,'Commercial contact created by business workflow'])
+    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'business.create','vendor_business',$2,$3)",[actor,business.id,'Business created; internal provisioning started'])
     await client.query('commit')
-    return reply.code(201).send({data:{
-     customer,
-     business,
-     plan:{id:plan.id,code:plan.code,name:plan.name},
-     license:{...publicLicense(license),customer_name:customer.name,vendor_business_name:business.name,plan_name:plan.name,plan_code:plan.code},
-     provisioning:{...provisioning,provisioning_key:provisioningKey},
-     license_key:desktopActivation.plaintext,
-     activation:{...desktopActivation.row,activation_code:desktopActivation.plaintext}
-    }})
    }catch(error){
     await client.query('rollback')
     throw error
    }finally{
     client.release()
    }
+
+   let provisioned:Awaited<ReturnType<typeof provisionVendorBusiness>>|null=null
+   try{
+    provisioned=await provisionVendorBusiness(pool,String(business.id),actor)
+   }catch{
+    // The provisioning helper persists the failure state and audit record.
+    // Returning the created business lets the Vendor retry without creating a
+    // second contact, business, licence, tenant database, or activation code.
+   }
+   const lifecycle=await readVendorBusinessLifecycle(pool,String(business.id))
+   return reply.code(201).send({data:{
+    customer:{id:customer.id,name:customer.name},
+    business:{id:business.id,name:business.name,business_type:business.business_type},
+    plan:{id:plan.id,code:plan.code,name:plan.name},
+    license:provisioned?.license?publicLicense(provisioned.license):null,
+    lifecycle
+   }})
   })
 
-  app.get('/api/vendor/provisioning-keys',{preHandler:vendor},async()=>({
+  app.post('/api/vendor/businesses/:id/provision/retry',{preHandler:vendor},async(request,reply)=>{
+   const businessId=z.string().uuid().parse((request.params as any).id)
+   const actor=(request as any).vendorAdmin?.username??'vendor'
+   const result=await provisionVendorBusiness(pool,businessId,actor)
+   return reply.send({data:{
+    license:publicLicense(result.license),
+    lifecycle:result.lifecycle
+   }})
+  })
+
+  app.get('/api/vendor/provisioning-keys',{preHandler:vendorInternalRecovery},async()=>({
    data:(await pool.query(`
     select
      k.id,
@@ -2017,7 +2031,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
    `)).rows
   }))
 
-  app.post('/api/vendor/provisioning-keys',{preHandler:vendor},async(request,reply)=>{
+  app.post('/api/vendor/provisioning-keys',{preHandler:vendorInternalRecovery},async(request,reply)=>{
    const input=z.object({
     license_id:z.string().uuid(),
     channel:z.enum(['cloud','desktop','mobile']).default('cloud'),
@@ -2196,7 +2210,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
    }
   })
 
-  app.post('/api/vendor/provisioning-keys/:id/revoke',{preHandler:vendor},async(request,reply)=>{
+  app.post('/api/vendor/provisioning-keys/:id/revoke',{preHandler:vendorInternalRecovery},async(request,reply)=>{
    const keyId=z.string().uuid().parse((request.params as any).id)
    const client=await pool.connect()
 
@@ -2295,10 +2309,14 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         await client.query('begin');
         const license=(await client.query(
           `select l.*,vb.name vendor_business_name,vb.status vendor_business_status,
-                  c.name customer_name
+                  c.name customer_name,t.status tenant_status,
+                  recipe.last_error_code provisioning_error_code,
+                  (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id
            from licenses l
            join vendor_businesses vb on vb.id=l.vendor_business_id
            join license_customers c on c.id=l.customer_id
+           left join saas_tenants t on t.vendor_business_id=vb.id
+           left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id
            where l.id=$1
            for update of l,vb`,
           [input.license_id]
@@ -2313,6 +2331,21 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
           throw Object.assign(new Error('License is not active.'),{statusCode:403,code:'LICENSE_INACTIVE'});
         if(license.expires_at&&Date.parse(license.expires_at)<=Date.now())
           throw Object.assign(new Error('Expired licenses cannot issue activation codes.'),{statusCode:410,code:'LICENSE_EXPIRED'});
+        const lifecycle=commercialLifecycle({
+          vendor_business_status:license.vendor_business_status,
+          license_id:license.id,
+          license_status:license.status,
+          license_expires_at:license.expires_at,
+          max_devices:license.max_devices,
+          max_desktop_devices:license.max_desktop_devices,
+          max_web_devices:license.max_web_devices,
+          max_mobile_devices:license.max_mobile_devices,
+          tenant_status:license.tenant_status,
+          runtime_business_id:license.runtime_business_id,
+          provisioning_error_code:license.provisioning_error_code
+        },config.SAAS_TENANCY_MODE);
+        if(lifecycle.state!=='READY_FOR_ACTIVATION')
+          throw Object.assign(new Error('Business provisioning is not complete.'),{statusCode:409,code:'BUSINESS_NOT_READY_FOR_ACTIVATION'});
 
         const issued=await issueActivationCode({
           client,
@@ -2385,10 +2418,14 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         await client.query('begin');
         const license=(await client.query(
           `select l.*,vb.name vendor_business_name,vb.status vendor_business_status,
-                  c.name customer_name
+                  c.name customer_name,t.status tenant_status,
+                  recipe.last_error_code provisioning_error_code,
+                  (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id
            from licenses l
            join vendor_businesses vb on vb.id=l.vendor_business_id
            join license_customers c on c.id=l.customer_id
+           left join saas_tenants t on t.vendor_business_id=vb.id
+           left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id
            where l.id=$1
            for update of l,vb`,
           [licenseId]
@@ -2403,6 +2440,14 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
           throw Object.assign(new Error('License is disabled.'),{statusCode:403,code:'LICENSE_DISABLED'});
         if(license.expires_at&&Date.parse(license.expires_at)<=Date.now())
           throw Object.assign(new Error('Expired licenses cannot issue activation codes.'),{statusCode:410,code:'LICENSE_EXPIRED'});
+        const lifecycle=commercialLifecycle({
+          ...license,
+          license_id:license.id,
+          license_status:license.status,
+          license_expires_at:license.expires_at
+        },config.SAAS_TENANCY_MODE);
+        if(lifecycle.state!=='READY_FOR_ACTIVATION')
+          throw Object.assign(new Error('Business provisioning is not complete.'),{statusCode:409,code:'BUSINESS_NOT_READY_FOR_ACTIVATION'});
 
         await client.query(
           `update license_activation_codes
@@ -2438,23 +2483,28 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       }
     });
 
-    app.get('/api/vendor/licenses',{preHandler:vendor},async()=>({
-        data:(await pool.query(
-            `select l.*,c.name customer_name,vb.name vendor_business_name,p.name plan_name,p.code plan_code,
+    app.get('/api/vendor/licenses',{preHandler:vendor},async()=>{
+        const rows=(await pool.query(
+            `select l.*,c.name customer_name,vb.name vendor_business_name,vb.status vendor_business_status,p.name plan_name,p.code plan_code,
               (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active') active_devices,
               (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active' and d.channel='desktop') active_desktop_devices,
               (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active' and d.channel='web') active_web_devices,
               (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active' and d.channel='mobile') active_mobile_devices,
               (select b.id from businesses b where b.vendor_business_id=l.vendor_business_id limit 1) runtime_business_id,
-              t.slug tenant_slug,t.database_name tenant_database_name,t.status tenant_status
+              t.status tenant_status,recipe.last_error_code provisioning_error_code
              from licenses l
              left join vendor_businesses vb on vb.id=l.vendor_business_id
              left join license_customers c on c.id=l.customer_id
              left join license_plans p on p.id=l.plan_id
              left join saas_tenants t on t.vendor_business_id=l.vendor_business_id
+             left join vendor_business_provisioning recipe on recipe.vendor_business_id=l.vendor_business_id
              order by l.created_at desc`
-        )).rows.map(publicLicense)
-    }));
+        )).rows;
+        return {data:rows.map(row=>{
+            const lifecycle=commercialLifecycle({...row,license_id:row.id,license_status:row.status,license_expires_at:row.expires_at},config.SAAS_TENANCY_MODE);
+            return {...publicLicense(row),lifecycle_state:lifecycle.state,readiness_reason:lifecycle.reason};
+        })};
+    });
 
     app.post('/api/vendor/licenses',{preHandler:vendor},async(request,reply)=>{
         const input=z.object({
@@ -2480,7 +2530,12 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             await client.query('begin');
 
             const business=(await client.query(
-                "select vb.*,c.name customer_name from vendor_businesses vb join license_customers c on c.id=vb.customer_id where vb.id=$1 for update",
+                `select vb.*,c.name customer_name,t.status tenant_status,
+                   (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id
+                 from vendor_businesses vb
+                 join license_customers c on c.id=vb.customer_id
+                 left join saas_tenants t on t.vendor_business_id=vb.id
+                 where vb.id=$1 for update of vb`,
                 [input.vendor_business_id]
             )).rows[0];
 
@@ -2499,6 +2554,26 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                         statusCode:422,
                         code:'VENDOR_BUSINESS_INACTIVE'
                     }
+                );
+
+            const existingLicense=(await client.query(
+                'select id from licenses where vendor_business_id=$1 limit 1 for update',
+                [business.id]
+            )).rows[0];
+            if(existingLicense)
+                throw Object.assign(
+                    new Error('A commercial licence is already assigned to this business.'),
+                    {statusCode:409,code:'COMMERCIAL_LICENSE_ALREADY_ASSIGNED'}
+                );
+
+            if(
+                (config.SAAS_TENANCY_MODE==='database_per_tenant'&&
+                  (business.tenant_status!=='active'||!business.runtime_business_id))||
+                (config.SAAS_TENANCY_MODE!=='database_per_tenant'&&!business.runtime_business_id)
+            )
+                throw Object.assign(
+                    new Error('Business provisioning must finish before a commercial licence is assigned.'),
+                    {statusCode:409,code:'BUSINESS_NOT_READY_FOR_ACTIVATION'}
                 );
 
             const plan=(await client.query(
@@ -2560,15 +2635,6 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 ]
             )).rows[0];
 
-            const desktopActivation=await issueActivationCode({
-                client,
-                licenseId:row.id,
-                channel:'desktop',
-                licenseExpiresAt:row.expires_at,
-                ttlHours:24,
-                notes:'Automatic one-time Desktop activation code from license creation'
-            });
-
             await client.query(
                 "insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','license.create','license',$1,$2)",
                 [
@@ -2576,11 +2642,6 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                     'Licence created for Vendor Business '+business.name
                 ]
             );
-            await client.query(
-                "insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','activation_code.issue','activation_code',$1,$2)",
-                [desktopActivation.row.id,'One-time Desktop activation code issued']
-            );
-
             await client.query('commit');
 
             return reply.code(201).send({
@@ -2589,11 +2650,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                     customer_name:business.customer_name,
                     vendor_business_name:business.name,
                     plan_name:plan.name,
-                    plan_code:plan.code,
-                    // Current Vendor UI reads license_key; intentionally return
-                    // the one-time activation code instead of the master secret.
-                    license_key:desktopActivation.plaintext,
-                    activation:{...desktopActivation.row,activation_code:desktopActivation.plaintext}
+                    plan_code:plan.code
                 }
             });
         }
@@ -2639,13 +2696,11 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
        (select count(*)::int from license_devices active where active.license_id=l.id and active.status='active') active_devices,
        (select count(*)::int from license_devices active where active.license_id=l.id and active.status='active' and active.channel='desktop') active_desktop_devices,
        (select count(*)::int from license_devices active where active.license_id=l.id and active.status='active' and active.channel='web') active_web_devices,
-       (select count(*)::int from license_devices active where active.license_id=l.id and active.status='active' and active.channel='mobile') active_mobile_devices,
-       t.slug tenant_slug,t.database_name tenant_database_name,t.status tenant_status
+       (select count(*)::int from license_devices active where active.license_id=l.id and active.status='active' and active.channel='mobile') active_mobile_devices
      from license_devices d
      join licenses l on l.id=d.license_id
      join vendor_businesses vb on vb.id=l.vendor_business_id
      left join license_customers c on c.id=l.customer_id
-     left join saas_tenants t on t.vendor_business_id=l.vendor_business_id
      order by coalesce(d.last_seen_at,d.activated_at) desc
     `)).rows}));
     app.post('/api/vendor/devices/:id/revoke', { preHandler: vendor }, async (request, reply) => { const deviceId = z.string().uuid().parse((request.params as any).id), client = await pool.connect(); try {
@@ -2769,14 +2824,25 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         }
     });
     app.get('/api/vendor/dashboard', { preHandler: vendor }, async () => {
-        const [customers, licenses, devices, activations] = await Promise.all([
-            pool.query('select count(*)::int count from license_customers'),
+        const runtimeReady = config.SAAS_TENANCY_MODE === 'database_per_tenant'
+            ? "t.status='active' and runtime.id is not null"
+            : 'runtime.id is not null';
+        const [businesses, licenses, devices, activations] = await Promise.all([
+            pool.query(`select
+              count(*)::int count,
+              count(*) filter(where recipe.last_error_code is not null or t.status='error' or vb.status<>'active' or l.status is distinct from 'active' or (l.expires_at is not null and l.expires_at<=now()))::int attention,
+              count(*) filter(where ${runtimeReady} and l.status='active' and (l.expires_at is null or l.expires_at>now()))::int ready
+             from vendor_businesses vb
+             left join lateral (select id,status,expires_at from licenses where vendor_business_id=vb.id order by issued_at desc,created_at desc limit 1) l on true
+             left join lateral (select id from businesses where vendor_business_id=vb.id limit 1) runtime on true
+             left join saas_tenants t on t.vendor_business_id=vb.id
+             left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id`),
             pool.query("select count(*)::int total,count(*) filter (where status='active')::int active,count(*) filter (where status='suspended')::int suspended,count(*) filter (where status='revoked')::int revoked from licenses"),
             pool.query("select count(*)::int total,count(*) filter (where status='active')::int active,count(*) filter (where status='revoked')::int revoked from license_devices"),
             pool.query("select count(*)::int total,count(*) filter (where created_at>=now()-interval '30 days')::int last_30_days from license_activations")
         ]);
         return { data: {
-                customers: customers.rows[0],
+                businesses: businesses.rows[0],
                 licenses: licenses.rows[0],
                 devices: devices.rows[0],
                 activations: activations.rows[0]
