@@ -5,7 +5,6 @@ import QRCode from 'qrcode'
 import {
   activateOnline,
   activateDevice,
-  activateProvisionedDevice,
   createOfflineRequest,
   getLicenseStatus,
   importOfflineLicense,
@@ -18,7 +17,6 @@ import {
   normalizeActivationCodeInput,
 } from '../utils/activationCode'
 import ErrorMessage from '../components/ErrorMessage'
-import Loading from '../components/Loading'
 import { getSetupStatus } from '../api/core-v2'
 import { useI18n, type Language } from '../i18n'
 
@@ -257,7 +255,6 @@ export default function LicensePage() {
   const [qr, setQr] = useState('')
   const [configured, setConfigured] = useState(false)
   const [activating, setActivating] = useState(false)
-  const [attemptingProvisionedActivation,setAttemptingProvisionedActivation]=useState(!usesLocalDesktopApi())
   const [redirect, setRedirect] = useState<string | null>(null)
   const activationInFlight = useRef(false)
   const certificate = status?.certificate as Record<string, unknown> | undefined
@@ -298,22 +295,16 @@ export default function LicensePage() {
   }
 
   useEffect(() => {
-    if (usesLocalDesktopApi()) {
-      void load().catch((value) => setError(activationErrorMessage(value, t)))
-      void getSetupStatus()
-        .then((setup) => setConfigured(setup.configured))
-        .catch(() => undefined)
-    } else {
-      void activateProvisionedDevice()
-        .then(() => refreshActivatedState())
-        .catch((value) => {
-          const code = (value as { response?: { data?: { code?: unknown } } })?.response?.data?.code
-          if (code !== 'PROVISIONING_ACTIVATION_GRANT_REQUIRED') {
-            setError(activationErrorMessage(value, t))
-          }
-        })
-        .finally(() => setAttemptingProvisionedActivation(false))
-    }
+    // A successful first-time workspace bootstrap explicitly exchanges its
+    // grant in ProvisionPage. Never probe that internal endpoint here: most
+    // activation visits have no grant cookie, and probing caused 401/409 noise
+    // as well as a competing activation path.
+    if (!usesLocalDesktopApi()) return
+
+    void load().catch((value) => setError(activationErrorMessage(value, t)))
+    void getSetupStatus()
+      .then((setup) => setConfigured(setup.configured))
+      .catch(() => undefined)
   }, [])
 
   async function online() {
@@ -390,6 +381,9 @@ export default function LicensePage() {
     }
   }
   async function offline() {
+    if (activationInFlight.current) return
+    activationInFlight.current = true
+    setActivating(true)
     try {
       setError(null)
       setSuccess(null)
@@ -436,6 +430,9 @@ export default function LicensePage() {
       )
     } catch (value) {
       setError(activationErrorMessage(value, t))
+    } finally {
+      activationInFlight.current = false
+      setActivating(false)
     }
   }
   async function revalidate(){
@@ -509,14 +506,6 @@ export default function LicensePage() {
     return <Navigate to="/login" replace />
   }
 
-  if (attemptingProvisionedActivation) {
-    return (
-      <main className="auth-page">
-        <Loading label={t('license.activating')} />
-      </main>
-    )
-  }
-
   return (
     <main className="license-page auth-page">
       <section className="license-shell">
@@ -581,6 +570,7 @@ export default function LicensePage() {
           {isTauriRuntime() && status?.certificate ? (
             <button
               className="button secondary license-revalidate"
+              disabled={activating}
               onClick={() => void revalidate()}
               type="button"
             >
@@ -663,6 +653,7 @@ export default function LicensePage() {
               <div className="license-offline-actions">
                 <button
                   className="button secondary"
+                  disabled={activating}
                   onClick={() => void offline()}
                   type="button"
                 >
@@ -670,8 +661,9 @@ export default function LicensePage() {
                 </button>
 
                 {request ? (
-                  <button
-                    className="button"
+                    <button
+                      className="button"
+                      disabled={activating}
                     onClick={() =>
                       download('activation-request.posreq', request)
                     }

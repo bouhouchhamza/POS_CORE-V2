@@ -20,14 +20,17 @@ The **Nouveau client** wizard performs one transactional operation:
 3. Select an active Plan.
 4. Choose licence duration: no expiry, 1 month, 3 months, 6 months, 1 year, or custom date.
 5. Create the active Licence using the Plan modules/device limit/offline policy.
-6. Create a cloud Provisioning Code automatically, valid for at most 24 hours and never beyond the licence expiry.
-7. Show the one-time Provisioning Code. Successful provisioning securely activates that same browser without exposing a second credential.
+6. Create a one-time Desktop activation code in the form `CP-XXXX-XXXX-XXXX-XXXX`.
+7. Show only the customer-facing CP code card: business, device usage, licence status, and copy/regenerate/disable/view-device actions.
+
+If a dedicated workspace has not yet been created, the console retains a separate **Configuration technique** action. It exposes the one-time provisioning credential only in that explicit internal/bootstrap view; it is never presented as an alternative customer activation code.
 
 If the transaction fails, the new onboarding objects are rolled back together.
 
 ## What each credential is for
-- **Provisioning Code (`prov_...`)**: sent to the merchant for `/provision`. It creates/binds the merchant runtime business. It is short-lived and one-time.
-- **Manual Activation Code (`act_...`)**: generated only from the advanced activation tools for an existing customer, support recovery, or a separately activated Desktop. It remains short-lived and one-time.
+- **Activation Code (`CP-XXXX-XXXX-XXXX-XXXX`)**: the normal customer credential. It is displayed once, is short-lived and one-time, and is stored only as a SHA-256 hash. Regeneration replaces unused codes only; it never deactivates existing devices.
+- **Provisioning Code (`prov_...`)**: an internal initial-workspace/bootstrap or recovery credential. It creates/binds the merchant runtime business and is not a normal device activation credential.
+- **Legacy Activation Code (`act_...`)**: retained for shipped-client and support compatibility; it is not the default Vendor Console credential.
 - **Vendor Admin Token**: server-side/bootstrap only. Never send it to a merchant and never use it as the daily browser login.
 
 ## Simplified navigation

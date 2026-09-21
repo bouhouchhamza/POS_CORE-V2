@@ -1,23 +1,38 @@
-import { useState,type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState,type FormEvent } from 'react'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { Check,ChevronLeft,ChevronRight } from 'lucide-react'
-import { provisionBusiness,resolveProvisioningKey,type ProvisionResolution } from '../api/core-v2'
+import { getSetupStatus, provisionBusiness,resolveProvisioningKey,type ProvisionResolution } from '../api/core-v2'
+import { activateProvisionedDevice } from '../api/license'
 import type {BusinessType,FeatureKey} from '../types'
-import { getApiErrorMessage } from '../utils/format'
 import {recommendedModules} from '../components/businessTypeConfig'
 import {useI18n,type Language} from '../i18n'
+import Loading from '../components/Loading'
+import {
+  activationRecoveryMessageKey,
+  createProvisioningActivationFlow,
+  provisioningGrantRecoveryAction,
+  provisioningPageAction,
+  type ProvisioningActivationOutcome,
+} from './provisioning-activation'
 
 const modules:FeatureKey[]=['pos','inventory','barcode','suppliers','purchases','customers','tables','qr_menu','kitchen','takeaway','delivery','reservations','product_variants','modifiers','weighted_products','expiry_tracking']
 
 export default function ProvisionPage(){
   const {t,language,setLanguage}=useI18n()
   const navigate=useNavigate()
+  const [checkingAccess,setCheckingAccess]=useState(true)
+  const [redirect,setRedirect]=useState<string|null>(null)
+  const [provisioningCompleted,setProvisioningCompleted]=useState(false)
   const [step,setStep]=useState(1)
   const [error,setError]=useState<string|null>(null)
   const [submitting,setSubmitting]=useState(false)
   const [provisioningKey,setProvisioningKey]=useState('')
   const [resolution,setResolution]=useState<ProvisionResolution|null>(null)
   const [resolving,setResolving]=useState(false)
+  const provisioningInFlight=useRef(false)
+  const activationFlow=useRef(createProvisioningActivationFlow())
+  const recoveryAttempted=useRef(false)
+  const recoveryAttempt=useRef<Promise<ProvisioningActivationOutcome>|null>(null)
 
   const [business,setBusiness]=useState({
     name:'',
@@ -39,6 +54,89 @@ export default function ProvisionPage(){
     password:'',
     passwordConfirmation:''
   })
+
+  const handleActivationOutcome=useCallback((outcome:ProvisioningActivationOutcome)=>{
+    if(outcome.kind==='activated'){
+      navigate('/login',{replace:true})
+      return
+    }
+
+    if(outcome.kind==='activation-failed'){
+      setProvisioningCompleted(true)
+
+      if(provisioningGrantRecoveryAction(outcome.error)==='activation'){
+        setRedirect('/activation')
+        return
+      }
+
+      setError(t(activationRecoveryMessageKey(outcome.error)))
+      return
+    }
+
+    if(outcome.kind==='provisioning-required'){
+      setError(t('provision.error.unavailable'))
+    }
+  },[navigate,t])
+
+  useEffect(()=>{
+    let current=true
+
+    // A configured workspace can still hold the short-lived, HttpOnly grant
+    // created by its completed provisioning transaction. Recover that device
+    // activation before routing to the regular login or activation screens.
+    const checkAccess=async()=>{
+      try{
+        const setup=await getSetupStatus()
+        if(!current)return
+
+        const action=provisioningPageAction(setup)
+        if(action==='provision')return
+        if(action==='activation'){
+          setRedirect('/activation')
+          return
+        }
+
+        activationFlow.current.markProvisioningCompleted()
+        setProvisioningCompleted(true)
+
+        if(!recoveryAttempted.current){
+          recoveryAttempted.current=true
+          recoveryAttempt.current=activationFlow.current.run({
+            activate:activateProvisionedDevice,
+          })
+        }
+
+        const outcome=await recoveryAttempt.current
+        if(current)handleActivationOutcome(outcome)
+      }
+      catch{
+        if(current)setRedirect('/activation')
+      }
+      finally{
+        if(current)setCheckingAccess(false)
+      }
+    }
+
+    void checkAccess()
+
+    return()=>{current=false}
+  },[handleActivationOutcome])
+
+  function provisioningError(value:unknown){
+    const code=(value as {response?:{data?:{code?:unknown}}})?.response?.data?.code
+    const keys:Record<string,string>={
+      PROVISIONING_KEY_INVALID:'provision.error.invalid',
+      PROVISIONING_KEY_ALREADY_CONSUMED:'provision.error.used',
+      PROVISIONING_KEY_REPLAY:'provision.error.used',
+      PROVISIONING_KEY_REVOKED:'provision.error.unavailable',
+      PROVISIONING_KEY_EXPIRED:'provision.error.expired',
+      VENDOR_BUSINESS_INACTIVE:'provision.error.unavailable',
+      LICENSE_INACTIVE:'provision.error.unavailable',
+      LICENSE_REVOKED:'provision.error.unavailable',
+      LICENSE_EXPIRED:'provision.error.unavailable',
+    }
+    return t(typeof code==='string'?keys[code]??'provision.error.unavailable':'provision.error.unavailable')
+  }
 
   async function resolveKey(){
     setResolving(true)
@@ -66,10 +164,7 @@ export default function ProvisionPage(){
     }
     catch(value){
       setResolution(null)
-
-      setError(
-        getApiErrorMessage(value)
-      )
+      setError(provisioningError(value))
     }
     finally{
       setResolving(false)
@@ -86,8 +181,29 @@ export default function ProvisionPage(){
     )
   }
 
+  const retryActivation=useCallback(async()=>{
+    if(provisioningInFlight.current)return
+
+    provisioningInFlight.current=true
+    setSubmitting(true)
+    setError(null)
+
+    try{
+      const outcome=await activationFlow.current.run({
+        activate:activateProvisionedDevice,
+      })
+      handleActivationOutcome(outcome)
+    }
+    finally{
+      provisioningInFlight.current=false
+      setSubmitting(false)
+    }
+  },[handleActivationOutcome])
+
   async function finish(event:FormEvent){
     event.preventDefault()
+
+    if(provisioningInFlight.current)return
 
     if(
       patron.password!==
@@ -99,42 +215,90 @@ export default function ProvisionPage(){
       return
     }
 
+    provisioningInFlight.current=true
     setSubmitting(true)
     setError(null)
 
     try{
-      await provisionBusiness({
-        provisioning_key:
-          provisioningKey.trim(),
+      const outcome=await activationFlow.current.run({
+        provision:()=>provisionBusiness({
+          provisioning_key:
+            provisioningKey.trim(),
 
-        setup:{
-          business:{
-            ...business,
-            logo:null
-          },
+          setup:{
+            business:{
+              ...business,
+              logo:null
+            },
 
-          enabled_features:
-            features,
+            enabled_features:
+              features,
 
-          admin:{
-            name:patron.name,
-            email:patron.email,
-            password:patron.password
+            admin:{
+              name:patron.name,
+              email:patron.email,
+              password:patron.password
+            }
           }
-        }
+        }),
+        activate:activateProvisionedDevice,
       })
 
-      navigate('/activation',{replace:true})
-    }
-    catch(value){
-      setError(
-        getApiErrorMessage(value)
-      )
+      if(outcome.kind==='provisioning-failed'){
+        setError(provisioningError(outcome.error))
+        return
+      }
+
+      handleActivationOutcome(outcome)
     }
     finally{
+      provisioningInFlight.current=false
       setSubmitting(false)
     }
   }
+
+  if(redirect)return <Navigate to={redirect} replace />
+
+  if(checkingAccess)return <main className="auth-page"><Loading label={t('app.initializing')} /></main>
+
+  if(provisioningCompleted)return <main className="setup-page">
+    <section className="setup-shell">
+      <header className="setup-header">
+        <div className="product-lockup">
+          <span className="brand-mark">CP</span>
+          <div>
+            <strong>CorePOS</strong>
+            <small>{t('provision.brand')}</small>
+          </div>
+        </div>
+
+        <label className="language-selector"><span className="sr-only">{t('language.label')}</span><select aria-label={t('language.label')} value={language} onChange={event=>setLanguage(event.target.value as Language)}><option value="fr">FR</option><option value="en">EN</option><option value="ar">AR</option></select></label>
+        <span>{t('license.activating')}</span>
+      </header>
+
+      <div className="setup-content">
+        <h1>{t('license.title')}</h1>
+        <p>{t('license.onlineHelp')}</p>
+
+        {error
+          ?<p className="error-message">{error}</p>
+          :null}
+      </div>
+
+      <footer className="setup-actions">
+        <span />
+        <button
+          className="button"
+          disabled={submitting}
+          onClick={()=>void retryActivation()}
+          type="button"
+        >
+          <Check size={18}/>
+          {submitting?t('license.activating'):t('license.activate')}
+        </button>
+      </footer>
+    </section>
+  </main>
 
   return <main className="setup-page">
     <section className="setup-shell">

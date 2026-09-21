@@ -10,13 +10,15 @@ Migration `0016_require_commercial_license_expiry.sql` gives any legacy null-exp
 
 ## One-time Desktop activation
 
-The commercial licence secret is internal and is never handed to the customer as a reusable activation key. Desktop uses a short-lived one-time activation code stored server-side only as SHA-256 (`license_activation_codes`). Default validity is 24 hours, capped at the commercial licence expiration.
+The commercial licence secret is internal and is never handed to the customer as a reusable activation key. Desktop uses a short-lived one-time activation code in the form `CP-XXXX-XXXX-XXXX-XXXX`, stored server-side only as SHA-256 (`license_activation_codes`). Its 16-character payload is drawn with rejection sampling from an unambiguous 31-character alphabet, giving about 79 bits of entropy. It is random, non-sequential, and independent of customer, business, tenant, licence, and device identifiers. Default validity is 24 hours, capped at the commercial licence expiration.
 
-A code is accepted only once. Successful activation atomically records `consumed_at` and the exact `consumed_device_id`. A consumed, revoked, expired, wrong-channel, inactive-business, or expired-licence code is rejected. Device activation still requires the signed Ed25519 device proof, so possession of a code alone is insufficient to impersonate another installation.
+A code is accepted only once. Complete CP codes are case-folded and separator-normalized; opaque legacy `act_...` credentials retain their historical trim-only matching. Successful activation atomically records `consumed_at` and the exact `consumed_device_id`. A consumed, revoked, expired, wrong-channel, inactive-business, or expired-licence code is rejected. Device activation still requires the signed Ed25519 device proof, so possession of a code alone is insufficient to impersonate another installation. Regeneration revokes only unused codes and never revokes or deletes an already activated device.
 
 Offline `.posreq` activation does not expose a reusable master key. Each request has a device proof, timestamp and replay nonce; one request cannot be issued twice. The resulting `.poslic` is Vendor-signed and device-bound.
 
-New cloud provisioning does not ask the merchant for a second activation code. A successful `prov_...` transaction creates a short-lived, one-time server-side activation grant bound to its provisioning key, licence, Vendor Business, and tenant. The browser receives only an HttpOnly grant cookie, exchanges it once for the existing activated-device cookie, and then proceeds to employee login. Manual `act_...` activation remains available for existing customers and support recovery.
+The normal customer route is `/activation`: it posts the CP code and signed device proof to `/api/license/device-activate`. CorePOS Desktop’s local relay posts the same proof to that endpoint and persists the returned certificate. Offline `.posreq` / `.poslic` activation remains a secondary, device-bound Ed25519-signed path.
+
+Cloud provisioning is a separate, one-time workspace-bootstrap/recovery operation, not a normal activation alternative. A successful `prov_...` transaction creates a short-lived, one-time server-side activation grant bound to its provisioning key, licence, Vendor Business, and tenant. Only the successful bootstrap screen exchanges that scoped HttpOnly grant for the activated-device cookie; `/activation` never probes the grant endpoint. Legacy `act_...` activation remains available for existing customers and support recovery.
 
 ## Device accounting
 
