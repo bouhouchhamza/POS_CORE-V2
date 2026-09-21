@@ -1,8 +1,15 @@
 import api,{unwrapData}from'./client'
 export type LicenseStatus={status:'development'|'activation_required'|'active'|'legacy'|'suspended'|'expired'|'revoked'|'device_revoked'|'vendor_business_inactive'|'offline_validity_exceeded';features:string[]|'all';business_type?:string|null;expires_at?:string|null;offline_valid_until?:string|null;development?:boolean;certificate?:unknown}
 export const getLicenseStatus=async()=>unwrapData<LicenseStatus>(await api.get('/license/status'))
+// The local Desktop API owns this relay; it forwards the signed device proof
+// to the canonical control-plane endpoint below and persists the certificate.
 export const activateOnline=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/activate',payload))
+// Canonical online activation endpoint for browser clients and the control
+// plane. It accepts CP codes and compatible legacy act_ credentials.
 export const activateDevice=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/device-activate',payload))
+// Internal bootstrap handoff only. It requires the narrowly scoped HttpOnly
+// grant cookie issued by a successful provisioning transaction; it is never a
+// normal activation fallback.
 export const activateProvisionedDevice=async()=>unwrapData<{activated:boolean}>(await api.post('/provision/activate-device',{intent:'activate-provisioned-device'}))
 export const createOfflineRequest=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/offline-request',payload))
 export const importOfflineLicense=async(payload:unknown)=>unwrapData<unknown>(await api.post('/license/import',payload))

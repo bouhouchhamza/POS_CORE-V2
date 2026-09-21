@@ -45,7 +45,7 @@ export function activationErrorMessage(
     ACTIVATION_CODE_INVALID: 'license.error.invalid',
     ACTIVATION_CODE_ALREADY_CONSUMED: 'license.error.alreadyUsed',
     ACTIVATION_CODE_REPLAY: 'license.error.alreadyUsed',
-    ACTIVATION_CODE_REVOKED: 'license.error.invalid',
+    ACTIVATION_CODE_REVOKED: 'license.error.revoked',
     ACTIVATION_CODE_EXPIRED: 'license.error.codeExpired',
     LICENSE_DISABLED: 'license.error.disabled',
     LICENSE_INACTIVE: 'license.error.disabled',
@@ -55,6 +55,14 @@ export function activationErrorMessage(
     LICENSE_DEVICE_LIMIT_REACHED: 'license.error.deviceLimit',
     LICENSE_DEVICE_CHANNEL_LIMIT_REACHED: 'license.error.deviceLimit',
     DEVICE_ALREADY_ACTIVATED: 'license.error.alreadyActivated',
+    DEVICE_REVOKED: 'license.error.deviceRevoked',
+    DEVICE_IDENTITY_MISMATCH: 'license.error.deviceIdentity',
+    DEVICE_CHANNEL_MISMATCH: 'license.error.deviceIdentity',
+    DEVICE_PROOF_INVALID: 'license.error.deviceProof',
+    ACTIVATION_REQUEST_STALE: 'license.error.retry',
+    ACTIVATION_REPLAY: 'license.error.alreadyActivated',
+    TENANT_NOT_PROVISIONED: 'license.error.workspaceUnavailable',
+    VENDOR_BUSINESS_INACTIVE: 'license.error.disabled',
     ACTIVATION_SERVER_UNAVAILABLE: 'license.error.serverUnavailable',
     LICENSE_SERVER_UNAVAILABLE: 'license.error.serverUnavailable',
   }
@@ -62,6 +70,7 @@ export function activationErrorMessage(
   if (code && keys[code]) return translate(keys[code])
 
   const responseStatus = (error as { response?: { status?: unknown } })?.response?.status
-  if (!responseStatus) return translate('license.error.serverUnavailable')
+  const numericStatus = typeof responseStatus === 'number' ? responseStatus : null
+  if (!numericStatus || numericStatus === 429 || numericStatus >= 500) return translate('license.error.serverUnavailable')
   return translate('license.error.generic')
 }
