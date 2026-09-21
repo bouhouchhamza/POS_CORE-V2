@@ -4,7 +4,7 @@ COPY package*.json ./
 COPY apps apps
 COPY packages packages
 RUN npm ci
-RUN npm run build -w @bimik/shared-types && npm run build -w @bimik/validation && npm run build -w @bimik/api && npm prune --omit=dev
+RUN npm run build -w @corepos/shared-types && npm run build -w @corepos/validation && npm run build -w @corepos/api && npm prune --omit=dev
 
 FROM node:22-alpine
 RUN addgroup -S bimik && adduser -S -G bimik bimik

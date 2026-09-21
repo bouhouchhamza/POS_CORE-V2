@@ -11,6 +11,7 @@ import Receipt from '../components/Receipt'
 import type { Sale } from '../types'
 import { formatCurrency, formatDate, getApiErrorMessage } from '../utils/format'
 import { isTauriRuntime, nativePrintSale } from '../utils/nativePrint'
+import { CorePosPrintError, printErrorMessage } from '../utils/printerErrors'
 import { useI18n } from '../i18n'
 
 export default function SalesPage() {
@@ -20,6 +21,7 @@ export default function SalesPage() {
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [printingSaleId, setPrintingSaleId] = useState<number | null>(null)
   const [returning,setReturning]=useState(false)
   const [returnReason,setReturnReason]=useState('')
   const [returnQuantities,setReturnQuantities]=useState<Record<number,number>>({})
@@ -44,7 +46,7 @@ export default function SalesPage() {
     loadSales()
   }, [])
 
-  function printTicket() {
+  function printTicket(onError: (error: unknown) => void, onFinished: () => void) {
     let finished = false
     const ticketWidth = settings.ticket_width === 58 ? '58mm' : '80mm'
 
@@ -61,22 +63,39 @@ export default function SalesPage() {
 
     window.addEventListener('afterprint', finish)
     window.setTimeout(() => {
-      window.print()
-      window.setTimeout(finish, 1200)
+      try {
+        if (typeof window.print !== 'function') throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE')
+        window.print()
+        window.setTimeout(() => { finish(); onFinished() }, 1200)
+      } catch (error) {
+        onError(error)
+        finish()
+        onFinished()
+      }
     }, 100)
   }
 
   async function printSale(sale: Sale) {
+    if (printingSaleId !== null) return
     setSelectedSale(sale)
     if (isTauriRuntime()) {
       try {
+        setPrintingSaleId(sale.id)
+        setError(null)
         await nativePrintSale(sale, settings, 2)
       } catch (err) {
-        setError(getApiErrorMessage(err))
+        setError(printErrorMessage(err, t))
+      } finally {
+        setPrintingSaleId(null)
       }
       return
     }
-    window.setTimeout(printTicket, 100)
+    setPrintingSaleId(sale.id)
+    setError(null)
+    printTicket(
+      (error) => setError(printErrorMessage(error, t)),
+      () => setPrintingSaleId(null),
+    )
   }
 
   async function submitReturn(){
@@ -134,10 +153,11 @@ export default function SalesPage() {
                         <button className="button secondary" onClick={()=>{setSelectedSale(sale);setReturning(true)}} type="button">{t('sales.return')}</button>
                         <button
                           className="button"
+                          disabled={printingSaleId !== null}
                           onClick={() => void printSale(sale)}
                           type="button"
                         >
-                          {t('common.print')}
+                          {printingSaleId === sale.id ? t('reports.printing') : t('common.print')}
                         </button>
                       </div>
                     </td>
@@ -203,7 +223,7 @@ export default function SalesPage() {
             <Receipt sale={selectedSale} settings={settings} />
 
             <div className="modal-actions">
-              <button className="button" onClick={printTicket} type="button">
+              <button className="button" disabled={printingSaleId !== null} onClick={() => void printSale(selectedSale)} type="button">
                 {t('common.print')}
               </button>
             </div>

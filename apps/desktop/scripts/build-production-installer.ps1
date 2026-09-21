@@ -50,14 +50,14 @@ try {
   Set-Location $repo
   Write-Host "BUILDING_PRODUCTION_INSTALLER=YES" -ForegroundColor Cyan
   Write-Host "LICENSE_SERVER_URL=$env:LICENSE_SERVER_URL"
-  npm run build -w @bimik/desktop
+  npm run build -w @corepos/desktop
   if ($LASTEXITCODE -ne 0) { throw "Desktop production build failed." }
 
   $nsis = Get-ChildItem "apps\desktop\src-tauri\target\release\bundle\nsis" -Filter *.exe |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $nsis) { throw "NSIS installer not found after build." }
 
-  npm run verify:installer-data-safety -w @bimik/desktop
+  npm run verify:installer-data-safety -w @corepos/desktop
   if ($LASTEXITCODE -ne 0) { throw "Installer data-safety verification failed." }
 
   Write-Host "PRODUCTION_INSTALLER_READY=YES" -ForegroundColor Green

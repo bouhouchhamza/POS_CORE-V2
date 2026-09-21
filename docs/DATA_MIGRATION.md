@@ -2,7 +2,7 @@
 
 Stop writes first. Copy the active SQLite database and uploaded-image directory, calculate SHA-256 checksums, and retain those untouched originals. Never run the importer against the only source copy.
 
-Create a new database without deleting the current one (for example `createdb bimik_cafe_import_new`), set `DATABASE_URL` to that explicit empty target, run `npm run db:migrate`, then run `npm run import:sqlite -w @bimik/api -- backend/database/database.sqlite` from the repository root. Root-relative and absolute source paths are supported.
+Create a new database without deleting the current one (for example `createdb corepos_import_new`), set `DATABASE_URL` to that explicit empty target, run `npm run db:migrate`, then run `npm run import:sqlite -w @corepos/api -- backend/database/database.sqlite` from the repository root. Root-relative and absolute source paths are supported.
 
 The importer refuses a non-empty target and preserves IDs, timestamps, Laravel bcrypt password hashes and decimal values. The new login accepts legacy bcrypt hashes; newly set passwords use Argon2id. Copy images into the persistent uploads volume using a reviewed path mapping.
 

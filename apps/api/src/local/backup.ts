@@ -8,13 +8,22 @@ import { sha256File } from "./database.js";
 
 export type BackupManifest = {
   format: 1;
-  application: "Bimik Cafe";
+  // "Bimik Cafe" is accepted solely so installed customers can restore
+  // backups produced before the CorePOS rebrand.
+  application: "CorePOS" | "Bimik Cafe";
   application_version: string;
   schema_version: number;
   created_at: string;
   files: Array<{ path: string; bytes: number; sha256: string }>;
   database_integrity: "ok";
 };
+
+const BACKUP_APPLICATION = "CorePOS" as const;
+const LEGACY_BACKUP_APPLICATION = "Bimik Cafe" as const;
+
+function isRecognizedBackupApplication(value: unknown): value is BackupManifest["application"] {
+  return value === BACKUP_APPLICATION || value === LEGACY_BACKUP_APPLICATION;
+}
 
 const sqlString = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const relativeFileName = (root: string, file: string) => path.relative(root, file).split(path.sep).join("/");
@@ -39,7 +48,7 @@ function copyUploads(source: string, destination: string) {
 export function validateLocalBackup(directory: string): BackupManifest {
   const manifestPath = path.join(directory, "manifest.json");
   const raw = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as BackupManifest;
-  if (raw.format !== 1 || raw.application !== "Bimik Cafe" || !Array.isArray(raw.files)) {
+  if (raw.format !== 1 || !isRecognizedBackupApplication(raw.application) || !Array.isArray(raw.files)) {
     throw new Error("Le manifeste de sauvegarde locale n'est pas reconnu.");
   }
   for (const expected of raw.files) {
@@ -82,7 +91,7 @@ export function createLocalBackup(
     const schemaVersion = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
     const manifest: BackupManifest = {
       format: 1,
-      application: "Bimik Cafe",
+      application: BACKUP_APPLICATION,
       application_version: options.applicationVersion ?? process.env.npm_package_version ?? "unknown",
       schema_version: schemaVersion,
       created_at: new Date().toISOString(),

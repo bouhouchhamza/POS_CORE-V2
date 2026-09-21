@@ -4,7 +4,7 @@ import test from 'node:test';
 import pg from 'pg';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import {offlineProofPayload,type OfflineRequest} from '@bimik/shared-types';
+import {offlineProofPayload,type OfflineRequest} from '@corepos/shared-types';
 import {verifyCertificate} from './crypto.js';
 import {issueActivationCode} from './activation-codes.js';
 

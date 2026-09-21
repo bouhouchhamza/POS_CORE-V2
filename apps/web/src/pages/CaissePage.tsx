@@ -29,8 +29,10 @@ import {
   getApiErrorMessage,
 } from '../utils/format'
 import {
+  isTauriRuntime,
   nativePrintCashRegisterReport,
 } from '../utils/nativePrint'
+import { CorePosPrintError, printErrorMessage } from '../utils/printerErrors'
 
 const cafeTime = (value: string, locale: string) =>
   new Intl.DateTimeFormat(locale, {
@@ -219,6 +221,14 @@ export default function CaissePage() {
       setPrinting(true)
       setError(null)
 
+      if (!isTauriRuntime()) {
+        if (typeof window.print !== 'function') {
+          throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE')
+        }
+        window.print()
+        return
+      }
+
       const settings = await getSettings()
 
       await nativePrintCashRegisterReport(
@@ -227,7 +237,7 @@ export default function CaissePage() {
         settings,
       )
     } catch (err) {
-      setError(getApiErrorMessage(err))
+      setError(printErrorMessage(err, t))
     } finally {
       setPrinting(false)
     }

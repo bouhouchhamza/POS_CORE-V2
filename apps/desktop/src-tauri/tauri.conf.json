@@ -5,9 +5,9 @@
     "version":  "2.0.8",
     "identifier":  "bond.nextora.cafe",
     "build":  {
-                  "beforeDevCommand":  "npm run dev -w @bimik/web",
+                  "beforeDevCommand":  "npm run dev -w @corepos/web",
                   "devUrl":  "http://localhost:5173",
-                  "beforeBuildCommand":  "npm run build:desktop -w @bimik/web",
+                  "beforeBuildCommand":  "npm run build:desktop -w @corepos/web",
                   "frontendDist":  "../../web/dist"
               },
     "app":  {

@@ -43,3 +43,13 @@ export function getApiErrorMessage(error: unknown) {
 
   return 'Une erreur est survenue.'
 }
+
+export function getApiErrorCode(error: unknown) {
+  if (!error || typeof error !== 'object') return null
+  const candidate = error as {
+    code?: unknown
+    response?: { data?: { code?: unknown } }
+  }
+  const code = candidate.response?.data?.code ?? candidate.code
+  return typeof code === 'string' ? code : null
+}

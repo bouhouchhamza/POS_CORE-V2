@@ -14,7 +14,8 @@ import {
   formatDate,
   getApiErrorMessage,
 } from "../utils/format";
-import { nativePrintCashReport } from "../utils/nativePrint";
+import { isTauriRuntime, nativePrintCashReport } from "../utils/nativePrint";
+import { CorePosPrintError, printErrorMessage } from "../utils/printerErrors";
 import { useI18n } from "../i18n";
 
 function currentMonthValue() {
@@ -148,6 +149,14 @@ export default function RapportPage() {
       setPrinting(kind);
       setError(null);
 
+      if (!isTauriRuntime()) {
+        if (typeof window.print !== "function") {
+          throw new CorePosPrintError("PRINT_BRIDGE_UNAVAILABLE");
+        }
+        window.print();
+        return;
+      }
+
       const settings = await getSettings();
 
       await nativePrintCashReport(
@@ -156,7 +165,7 @@ export default function RapportPage() {
         title,
       );
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      setError(printErrorMessage(err, t));
     } finally {
       setPrinting(null);
     }

@@ -1,4 +1,4 @@
-import { offlineProofPayload } from '@bimik/shared-types'
+import { offlineProofPayload } from '@corepos/shared-types'
 import { useEffect, useRef, useState } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import QRCode from 'qrcode'
@@ -12,7 +12,11 @@ import {
   revalidateLicense,
   type LicenseStatus,
 } from '../api/license'
-import { getApiErrorMessage } from '../utils/format'
+import {
+  activationErrorMessage,
+  formatActivationCodeWhileTyping,
+  normalizeActivationCodeInput,
+} from '../utils/activationCode'
 import ErrorMessage from '../components/ErrorMessage'
 import Loading from '../components/Loading'
 import { getSetupStatus } from '../api/core-v2'
@@ -248,6 +252,7 @@ export default function LicensePage() {
   const [status, setStatus] = useState<LicenseStatus | null>({ status: reasonStatus, features: [] })
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
   const [request, setRequest] = useState<unknown>(null)
   const [qr, setQr] = useState('')
   const [configured, setConfigured] = useState(false)
@@ -269,12 +274,14 @@ export default function LicensePage() {
     return next
   }
 
-  const refreshActivatedState = async () => {
+  const refreshActivatedState = async (deferRedirect = false) => {
     if (!usesLocalDesktopApi()) {
       const setup = await getSetupStatus()
       setStatus({ status: 'active', features: [] })
       setConfigured(setup.configured)
-      setRedirect(setup.configured ? '/login' : '/setup')
+      const target = setup.configured ? '/login' : '/setup'
+      if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
+      else setRedirect(target)
       return
     }
     const [nextStatus, setup] = await Promise.all([
@@ -284,13 +291,15 @@ export default function LicensePage() {
     setStatus(nextStatus)
     setConfigured(setup.configured)
     if (nextStatus.status === 'active' || nextStatus.status === 'development') {
-      setRedirect(setup.configured ? '/login' : '/setup')
+      const target = setup.configured ? '/login' : '/setup'
+      if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
+      else setRedirect(target)
     }
   }
 
   useEffect(() => {
     if (usesLocalDesktopApi()) {
-      void load().catch((value) => setError(getApiErrorMessage(value)))
+      void load().catch((value) => setError(activationErrorMessage(value, t)))
       void getSetupStatus()
         .then((setup) => setConfigured(setup.configured))
         .catch(() => undefined)
@@ -300,7 +309,7 @@ export default function LicensePage() {
         .catch((value) => {
           const code = (value as { response?: { data?: { code?: unknown } } })?.response?.data?.code
           if (code !== 'PROVISIONING_ACTIVATION_GRANT_REQUIRED') {
-            setError(getApiErrorMessage(value))
+            setError(activationErrorMessage(value, t))
           }
         })
         .finally(() => setAttemptingProvisionedActivation(false))
@@ -313,6 +322,9 @@ export default function LicensePage() {
     setActivating(true)
     try {
       setError(null)
+      setSuccess(null)
+
+      const activationCode = normalizeActivationCodeInput(key)
 
       const identity = await deviceIdentity()
       const device_name = navigator.platform || 'CorePOS Desktop'
@@ -326,7 +338,7 @@ export default function LicensePage() {
         const requested_at = new Date().toISOString()
 
         const activationPayload = {
-          license_key: key,
+          license_key: activationCode,
           installation_id: identity.installation_id,
           device_public_key: identity.public_key,
           device_name,
@@ -351,7 +363,7 @@ export default function LicensePage() {
           crypto.randomUUID().replaceAll('-', '')
         const requested_at = new Date().toISOString()
         const activationPayload = {
-          license_key: key,
+          license_key: activationCode,
           installation_id: identity.installation_id,
           device_public_key: identity.public_key,
           device_name,
@@ -368,9 +380,10 @@ export default function LicensePage() {
       }
 
       setKey('')
-      await refreshActivatedState()
+      setSuccess(t('license.activationSuccess'))
+      await refreshActivatedState(true)
     } catch (value) {
-      setError(getApiErrorMessage(value))
+      setError(activationErrorMessage(value, t))
     } finally {
       activationInFlight.current = false
       setActivating(false)
@@ -379,6 +392,7 @@ export default function LicensePage() {
   async function offline() {
     try {
       setError(null)
+      setSuccess(null)
       setRequest(null)
       setQr('')
 
@@ -421,7 +435,7 @@ export default function LicensePage() {
         }),
       )
     } catch (value) {
-      setError(getApiErrorMessage(value))
+      setError(activationErrorMessage(value, t))
     }
   }
   async function revalidate(){
@@ -442,7 +456,7 @@ export default function LicensePage() {
         device_proof,
       })
       await load()
-    }catch(value){setError(getApiErrorMessage(value))}
+    }catch(value){setError(activationErrorMessage(value, t))}
   }
   async function imported(file: File) {
     if (activationInFlight.current) return
@@ -474,9 +488,10 @@ export default function LicensePage() {
         device_proof,
       })
 
-      await refreshActivatedState()
+      setSuccess(t('license.activationSuccess'))
+      await refreshActivatedState(true)
     } catch (value) {
-      setError(getApiErrorMessage(value))
+      setError(activationErrorMessage(value, t))
     } finally {
       activationInFlight.current = false
       setActivating(false)
@@ -527,6 +542,7 @@ export default function LicensePage() {
         </div>
 
         <ErrorMessage message={error} />
+        {success ? <div className="success-message license-success" role="status">{success}</div> : null}
 
         <article className="license-status-card">
           <div>
@@ -578,22 +594,42 @@ export default function LicensePage() {
             <div className="license-method-head">
               <span className="license-method-index">01</span>
               <div>
-                <h2>{t('license.onlineTitle')}</h2>
+                <div className="license-method-title-row">
+                  <h2>{t('license.onlineTitle')}</h2>
+                  <span className="license-online-badge">{t('license.recommended')}</span>
+                </div>
                 <p>
                   {t('license.onlineHelp')}
                 </p>
               </div>
             </div>
 
-            <label className="license-field">
+            <label className="license-field license-code-field">
               <span>{t('license.key')}</span>
-              <input
-                autoComplete="off"
-                placeholder={t('license.keyPlaceholder')}
-                spellCheck={false}
-                value={key}
-                onChange={(event) => setKey(event.target.value)}
-              />
+              <span className="license-code-control">
+                <input
+                  aria-invalid={Boolean(error)}
+                  autoCapitalize="characters"
+                  autoComplete="one-time-code"
+                  dir="ltr"
+                  inputMode="text"
+                  placeholder={t('license.keyPlaceholder')}
+                  spellCheck={false}
+                  value={key}
+                  onBlur={() => setKey(current => normalizeActivationCodeInput(current))}
+                  onChange={(event) => setKey(formatActivationCodeWhileTyping(event.target.value))}
+                />
+                <button
+                  className="license-paste-button"
+                  onClick={() => void navigator.clipboard.readText()
+                    .then(value => setKey(formatActivationCodeWhileTyping(value)))
+                    .catch(() => undefined)}
+                  type="button"
+                >
+                  {t('license.paste')}
+                </button>
+              </span>
+              <small className="license-helper">{t('license.codeHelp')}</small>
             </label>
 
             <button
@@ -614,7 +650,7 @@ export default function LicensePage() {
                   {t('license.offlineHelp')}
                 </small>
               </span>
-              <span className="license-details-hint">{t('license.show')}</span>
+              <span className="license-details-hint" data-hide-label={t('license.hide')}>{t('license.show')}</span>
             </summary>
 
             <div className="license-offline-content">

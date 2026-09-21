@@ -12,7 +12,7 @@ const entry = path.join(repository, 'apps', 'api', 'dist', 'src', 'local', 'serv
 const bundledEntry = path.join(repository, 'apps', 'desktop', 'src-tauri', 'binaries', 'corepos-local-api.cjs')
 const npmCli = process.env.npm_execpath
 if (!npmCli) throw new Error('Ce script doit Ãªtre lancÃ© avec npm.')
-const build = spawnSync(process.execPath, [npmCli, 'run', 'build', '-w', '@bimik/api'], { cwd: repository, stdio: 'inherit' })
+const build = spawnSync(process.execPath, [npmCli, 'run', 'build', '-w', '@corepos/api'], { cwd: repository, stdio: 'inherit' })
 if (build.error) throw build.error
 if (build.status !== 0) process.exit(build.status ?? 1)
 fs.mkdirSync(path.dirname(output), { recursive: true })

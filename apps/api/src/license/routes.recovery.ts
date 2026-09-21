@@ -2,7 +2,7 @@ import crypto from'node:crypto'
 import type{FastifyInstance,FastifyReply,FastifyRequest}from'fastify'
 import type pg from'pg'
 import{z}from'zod'
-import{businessTypes,featureKeys}from'@bimik/shared-types'
+import{businessTypes,featureKeys}from'@corepos/shared-types'
 import{fingerprint,licenseKeyHash,signCertificate,type LicenseCertificate}from'./crypto.js'
 import{activationRequestIsFresh}from'./policy.js'
 

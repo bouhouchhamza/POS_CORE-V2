@@ -4,8 +4,8 @@ import type pg from'pg'
 import argon2 from'argon2'
 import bcrypt from'bcryptjs'
 import{z}from'zod'
-import{offlineRequestSchema,businessSetupSchema}from'@bimik/validation'
-import{offlineProofPayload,businessTypes,featureKeys}from'@bimik/shared-types'
+import{offlineRequestSchema,businessSetupSchema}from'@corepos/validation'
+import{offlineProofPayload,businessTypes,featureKeys}from'@corepos/shared-types'
 import{fingerprint,licenseKeyHash,signCertificate,type LicenseCertificate}from'./crypto.js'
 import{activationRequestIsFresh}from'./policy.js'
 import{config}from'../config.js'
@@ -54,6 +54,11 @@ const offlineActivationWindowMs = () => {
 const replayError=(error:any)=>{
     const value = error;
     return value?.code === '23505' && value.constraint === 'license_activations_license_nonce_unique';
+};
+const publicLicense=(row:any)=>{
+    if(!row)return row;
+    const {key_hash:_keyHash,...safe}=row;
+    return safe;
 };
 const verifyOfflineDeviceProof=(publicKey:string,payload:string,signature:string)=>{
     try {
@@ -602,10 +607,10 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     app.post('/api/license/device-activate', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
         // Compatibility note: the field is still named `license_key` because
         // shipped Desktop clients already send it. Its value is now a
-        // short-lived ONE-TIME activation code (act_...), never the reusable
-        // commercial licence secret.
+        // short-lived one-time activation credential (CP-XXXX-XXXX-XXXX-XXXX
+        // or a legacy act_ token), never the reusable commercial licence secret.
         const input = z.object({
-            license_key: z.string().min(20).max(200),
+            license_key: z.string().min(18).max(200),
             installation_id: z.string().uuid(),
             device_public_key: z.string().min(40).max(5000),
             device_name: z.string().min(1).max(200),
@@ -626,7 +631,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         try {
             await client.query('begin');
             const license = await lockActivationCode(client, input.license_key, 'desktop');
-            validateActivationCode(license);
+            validateActivationCode(license, input.installation_id);
             if (config.SAAS_TENANCY_MODE === 'database_per_tenant') {
                 const tenant = (await client.query(
                     `select status from saas_tenants
@@ -698,6 +703,13 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
         }
         catch (error) {
             await client.query('rollback');
+            const failureCode = typeof (error as any)?.code === 'string'
+                ? (error as any).code
+                : 'ACTIVATION_CODE_INVALID';
+            await pool.query(
+                "insert into license_audit_logs(actor,action,entity_type,description) values('device','activation_code.reject','activation_code',$1)",
+                [`Rejected Desktop activation attempt: ${failureCode}`]
+            ).catch(() => undefined);
             if (replayError(error))
                 return reply.code(409).send({ message: 'This activation request was already used.', code: 'ACTIVATION_REPLAY' });
             throw error;
@@ -1924,6 +1936,15 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      ]
     )).rows[0]
 
+    const desktopActivation=await issueActivationCode({
+     client,
+     licenseId:license.id,
+     channel:'desktop',
+     licenseExpiresAt:license.expires_at,
+     ttlHours:24,
+     notes:'Automatic one-time Desktop activation code from onboarding'
+    })
+
     const normalProvisioningExpiry=now.getTime()+24*60*60*1000
     const provisioningExpiryMs=licenseExpiry?Math.min(normalProvisioningExpiry,licenseExpiry.getTime()):normalProvisioningExpiry
     if(provisioningExpiryMs<=now.getTime())throw Object.assign(new Error('Provisioning expiration is invalid.'),{statusCode:422,code:'PROVISIONING_EXPIRY_INVALID'})
@@ -1939,14 +1960,17 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'business.create','vendor_business',$2,$3)",[actor,business.id,'Vendor Business '+business.name+' created by onboarding'])
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'license.create','license',$2,$3)",[actor,license.id,'Licence created by onboarding'])
     await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'provisioning_key.issue','provisioning_key',$2,$3)",[actor,provisioning.id,'Provisioning credential issued by onboarding'])
+    await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values($1,'activation_code.issue','activation_code',$2,$3)",[actor,desktopActivation.row.id,'One-time Desktop activation code issued by onboarding'])
 
     await client.query('commit')
     return reply.code(201).send({data:{
      customer,
      business,
      plan:{id:plan.id,code:plan.code,name:plan.name},
-     license:{...license,customer_name:customer.name,vendor_business_name:business.name,plan_name:plan.name,plan_code:plan.code},
-     provisioning:{...provisioning,provisioning_key:provisioningKey}
+     license:{...publicLicense(license),customer_name:customer.name,vendor_business_name:business.name,plan_name:plan.name,plan_code:plan.code},
+     provisioning:{...provisioning,provisioning_key:provisioningKey},
+     license_key:desktopActivation.plaintext,
+     activation:{...desktopActivation.row,activation_code:desktopActivation.plaintext}
     }})
    }catch(error){
     await client.query('rollback')
@@ -2349,6 +2373,71 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       }
     });
 
+    app.post('/api/vendor/licenses/:id/activation-code/regenerate',{preHandler:vendor},async(request,reply)=>{
+      const licenseId=z.string().uuid().parse((request.params as any).id);
+      const input=z.object({
+        channel:z.literal('desktop').default('desktop'),
+        ttl_hours:z.number().int().min(1).max(168).default(24),
+        notes:z.string().max(1000).nullable().optional()
+      }).strict().parse(request.body);
+      const client=await pool.connect();
+      try{
+        await client.query('begin');
+        const license=(await client.query(
+          `select l.*,vb.name vendor_business_name,vb.status vendor_business_status,
+                  c.name customer_name
+           from licenses l
+           join vendor_businesses vb on vb.id=l.vendor_business_id
+           join license_customers c on c.id=l.customer_id
+           where l.id=$1
+           for update of l,vb`,
+          [licenseId]
+        )).rows[0];
+        if(!license){
+          await client.query('rollback');
+          return reply.code(404).send({message:'License not found.',code:'LICENSE_NOT_FOUND'});
+        }
+        if(license.vendor_business_status!=='active')
+          throw Object.assign(new Error('Vendor Business is not active.'),{statusCode:403,code:'VENDOR_BUSINESS_INACTIVE'});
+        if(license.status!=='active')
+          throw Object.assign(new Error('License is disabled.'),{statusCode:403,code:'LICENSE_DISABLED'});
+        if(license.expires_at&&Date.parse(license.expires_at)<=Date.now())
+          throw Object.assign(new Error('Expired licenses cannot issue activation codes.'),{statusCode:410,code:'LICENSE_EXPIRED'});
+
+        await client.query(
+          `update license_activation_codes
+           set revoked_at=now(),updated_at=now()
+           where license_id=$1 and channel=$2
+             and consumed_at is null and revoked_at is null and expires_at>now()`,
+          [licenseId,input.channel]
+        );
+        const issued=await issueActivationCode({
+          client,
+          licenseId,
+          channel:input.channel,
+          licenseExpiresAt:license.expires_at,
+          ttlHours:input.ttl_hours,
+          notes:input.notes??'Regenerated from Vendor Console'
+        });
+        await client.query(
+          "insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','activation_code.regenerate','activation_code',$1,$2)",
+          [issued.row.id,`Unused Desktop activation codes replaced for ${license.vendor_business_name}`]
+        );
+        await client.query('commit');
+        return reply.code(201).send({data:{
+          ...issued.row,
+          activation_code:issued.plaintext,
+          vendor_business_name:license.vendor_business_name,
+          customer_name:license.customer_name
+        }});
+      }catch(error){
+        await client.query('rollback');
+        throw error;
+      }finally{
+        client.release();
+      }
+    });
+
     app.get('/api/vendor/licenses',{preHandler:vendor},async()=>({
         data:(await pool.query(
             `select l.*,c.name customer_name,vb.name vendor_business_name,p.name plan_name,p.code plan_code,
@@ -2364,7 +2453,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
              left join license_plans p on p.id=l.plan_id
              left join saas_tenants t on t.vendor_business_id=l.vendor_business_id
              order by l.created_at desc`
-        )).rows
+        )).rows.map(publicLicense)
     }));
 
     app.post('/api/vendor/licenses',{preHandler:vendor},async(request,reply)=>{
@@ -2496,7 +2585,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
 
             return reply.code(201).send({
                 data:{
-                    ...row,
+                    ...publicLicense(row),
                     customer_name:business.customer_name,
                     vendor_business_name:business.name,
                     plan_name:plan.name,
@@ -2541,7 +2630,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       const row=(await client.query(`update licenses set max_devices=$2,max_desktop_devices=$3,max_web_devices=$4,max_mobile_devices=$5,updated_at=now() where id=$1 returning *`,[licenseId,input.max_devices,input.max_desktop_devices,input.max_web_devices,input.max_mobile_devices])).rows[0]
       await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','license.device_limits.update','license',$1,$2)",[licenseId,`Device limits updated: total=${input.max_devices}, desktop=${input.max_desktop_devices??'unlimited'}, web=${input.max_web_devices??'unlimited'}, mobile=${input.max_mobile_devices??'unlimited'}`])
       await client.query('commit')
-      return{data:{...row,active_devices:counts}}
+      return{data:{...publicLicense(row),active_devices:counts}}
      }catch(error){await client.query('rollback');throw error}finally{client.release()}
     })
     app.get('/api/vendor/devices',{preHandler:vendor},async()=>({data:(await pool.query(`
@@ -2763,7 +2852,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 `License updated: expiration=${renewalExpiry?.toISOString()??'lifetime'}, offline=${offlineValidityDays??'permanent'}`
             ]);
             await client.query('commit');
-            return { data: updated };
+            return { data: publicLicense(updated) };
         }
         catch (error) {
             await client.query('rollback');

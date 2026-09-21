@@ -22,7 +22,7 @@ The uploaded source pack intentionally excluded `*.pem`, so this ZIP does not an
 ```powershell
 Set-Location "C:\Users\pc\Desktop\Core POS V2 Git"
 scp root@195.35.0.63:/opt/core-pos-v2-prod/license-signing-public.pem "apps\desktop\src-tauri\resources\license-signing-public.pem"
-npm run build:production-installer -w @bimik/desktop
+npm run build:production-installer -w @corepos/desktop
 ```
 
 The build script validates that the file is a public key, injects it at Rust compile time so `option_env!("LICENSE_SIGNING_PUBLIC_KEY")` is embedded in the EXE, runs the installer data-safety verifier, and prints the installer SHA-256. `build.rs` refuses a release build with no public key or with a private key.

@@ -9,7 +9,7 @@ $env:DATABASE_URL = 'postgresql://bimik_test:password@127.0.0.1:5432/bimik_core_
 $env:TEST_DATABASE_URL = $env:DATABASE_URL
 $env:REQUIRE_POSTGRES_INTEGRATION = 'true'
 npm run db:migrate
-npm run test:postgres -w @bimik/api
+npm run test:postgres -w @corepos/api
 ```
 
 `REQUIRE_POSTGRES_INTEGRATION=true` makes a missing or incorrectly named test URL

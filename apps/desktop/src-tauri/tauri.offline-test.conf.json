@@ -3,7 +3,7 @@
   "productName": "CorePOS Test",
   "identifier": "bond.nextora.cafe.test",
   "build": {
-    "beforeBuildCommand": "npm run build:desktop -w @bimik/web",
+    "beforeBuildCommand": "npm run build:desktop -w @corepos/web",
     "frontendDist": "../../web/dist"
   },
   "bundle": {

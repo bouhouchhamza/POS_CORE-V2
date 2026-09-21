@@ -1,5 +1,6 @@
 import type { AppSettings } from "../api/settings";
 import type { CashRegisterSession, Sale, SalesReport } from "../types";
+import { CorePosPrintError } from './printerErrors';
 
 type PrintLanguage = "fr" | "en" | "ar";
 type RasterAlign = "left" | "center" | "right";
@@ -26,8 +27,6 @@ const labels = {
     paymentMethod: "Mode de règlement",
     product: "Produit",
     reportTitle: "RAPPORT DE CAISSE",
-    desktopOnly: "Impression thermique disponible uniquement dans CorePOS Desktop.",
-    nativeMissing: "Client desktop natif non détecté.",
     invalidCopies: "Nombre de copies invalide.",
   },
   en: {
@@ -45,8 +44,6 @@ const labels = {
     paymentMethod: "Payment method",
     product: "Product",
     reportTitle: "CASH REGISTER REPORT",
-    desktopOnly: "Thermal printing is available only in CorePOS Desktop.",
-    nativeMissing: "Native desktop client not detected.",
     invalidCopies: "Invalid number of copies.",
   },
   ar: {
@@ -64,8 +61,6 @@ const labels = {
     paymentMethod: "طريقة الدفع",
     product: "منتج",
     reportTitle: "تقرير الصندوق",
-    desktopOnly: "الطباعة الحرارية متاحة فقط في تطبيق CorePOS Desktop.",
-    nativeMissing: "تطبيق سطح المكتب غير متاح.",
     invalidCopies: "عدد النسخ غير صالح.",
   },
 } as const;
@@ -162,7 +157,7 @@ export async function listNativePrinters() {
 
 export async function resolveNativePrinter(configuredPrinter = "") {
   if (!isTauriRuntime()) {
-    throw new Error(labels[currentPrintLanguage()].desktopOnly);
+    throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE');
   }
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -497,7 +492,7 @@ const bytesToBase64 = (bytes: Uint8Array) => {
 
 const renderArabicRaster = (lines: RasterLine[], settings: AppSettings) => {
   if (typeof document === "undefined") {
-    throw new Error(labels.ar.nativeMissing);
+    throw new CorePosPrintError('PRINT_FAILED');
   }
 
   const width = settings.ticket_width === 58 ? 384 : 576;
@@ -511,7 +506,7 @@ const renderArabicRaster = (lines: RasterLine[], settings: AppSettings) => {
   measuringCanvas.width = width;
   measuringCanvas.height = 32;
   const measuringContext = measuringCanvas.getContext("2d", { willReadFrequently: true });
-  if (!measuringContext) throw new Error(labels.ar.nativeMissing);
+  if (!measuringContext) throw new CorePosPrintError('PRINT_FAILED');
 
   type PreparedLine =
     | { kind: "text"; text: string; align: RasterAlign; bold: boolean; fontSize: number; height: number }
@@ -558,7 +553,7 @@ const renderArabicRaster = (lines: RasterLine[], settings: AppSettings) => {
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error(labels.ar.nativeMissing);
+  if (!context) throw new CorePosPrintError('PRINT_FAILED');
 
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, width, height);
@@ -661,7 +656,7 @@ export async function nativePrintSale(
   const language = currentPrintLanguage();
 
   if (!isTauriRuntime()) {
-    throw new Error(labels[language].nativeMissing);
+    throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE');
   }
 
   ensureCopies(copies, language);
@@ -682,7 +677,7 @@ export async function nativePrintCashReport(
   const language = currentPrintLanguage();
 
   if (!isTauriRuntime()) {
-    throw new Error(labels[language].desktopOnly);
+    throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE');
   }
 
   if (language === "ar") {
@@ -708,7 +703,7 @@ export async function nativePrintCashRegisterReport(
   const language = currentPrintLanguage();
 
   if (!isTauriRuntime()) {
-    throw new Error(labels[language].desktopOnly);
+    throw new CorePosPrintError('PRINT_BRIDGE_UNAVAILABLE');
   }
 
   if (language === "ar") {
