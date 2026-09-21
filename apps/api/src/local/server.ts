@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import bcrypt from "bcryptjs";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -12,7 +11,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { menuImportRequestSchema } from "@bimik/validation";
+import { menuImportRequestSchema } from "@corepos/validation";
 import { extractPdfText, MenuPdfError } from "../menu-import/pdf.js";
 import {
   MENU_PDF_MAX_BYTES,
@@ -25,7 +24,7 @@ import { ensureLocalPaths, localSecret, resolveLocalPaths, type LocalPaths } fro
 import type { DatabaseSync } from "node:sqlite";
 import { registerLocalCoreV2Routes } from '../core-v2/local-routes.js';
 import {readLocalCertificate} from '../license/local-certificate.js';
-import type {Role} from '@bimik/shared-types';
+import type {Role} from '@corepos/shared-types';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -1516,11 +1515,8 @@ function reportForMonth(
   };
 }
 export async function startLocalServer() { const host = "127.0.0.1"; const port = Number(process.env.BIMIK_LOCAL_PORT ?? 32145); const paths=resolveLocalPaths(); console.info(`CorePOS sidecar: SQLite=${paths.database}`); const app = await buildLocalApp({ logger: true, paths }); await app.listen({ host, port }); return app; }
-const entry = process.env.BIMIK_SIDECAR === "1" || (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href);
+const directLocalServerEntry = /(?:^|[\\/])local[\\/]server\.(?:[cm]?js|ts)$/i.test(process.argv[1] ?? "");
+const entry = process.env.BIMIK_SIDECAR === "1" || directLocalServerEntry;
 if (entry) startLocalServer().catch((error) => { console.error(error instanceof Error ? error.message : "Le service local n'a pas démarré."); process.exitCode = 1; });
-
-
-
-
 
 

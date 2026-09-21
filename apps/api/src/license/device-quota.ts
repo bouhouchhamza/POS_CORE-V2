@@ -33,7 +33,8 @@ export async function assertDeviceSlotAvailable(
   if (maxTotal >= 0 && total >= maxTotal) {
     throw Object.assign(new Error('The license total device limit has been reached.'), {
       statusCode: 409,
-      code: 'LICENSE_DEVICE_LIMIT_REACHED',
+      code: 'DEVICE_LIMIT_REACHED',
+      limit_scope: 'total',
       device_channel: channel,
       active_devices: total,
       max_devices: maxTotal,
@@ -43,7 +44,8 @@ export async function assertDeviceSlotAvailable(
   if (maxChannel != null && channelTotal >= maxChannel) {
     throw Object.assign(new Error(`The ${channel} device limit has been reached.`), {
       statusCode: 409,
-      code: 'LICENSE_DEVICE_CHANNEL_LIMIT_REACHED',
+      code: 'DEVICE_LIMIT_REACHED',
+      limit_scope: 'channel',
       device_channel: channel,
       active_devices: channelTotal,
       max_devices: maxChannel,

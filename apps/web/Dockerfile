@@ -8,7 +8,7 @@ ARG VITE_API_URL=/api
 ARG VITE_PUBLIC_APP_URL
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_PUBLIC_APP_URL=$VITE_PUBLIC_APP_URL
-RUN npm run build -w @bimik/shared-types && npm run build -w @bimik/validation && npm run build -w @bimik/web
+RUN npm run build -w @corepos/shared-types && npm run build -w @corepos/validation && npm run build -w @corepos/web
 FROM caddy:2-alpine
 COPY --from=build /app/apps/web/dist /srv
 COPY apps/web/Caddyfile /etc/caddy/Caddyfile

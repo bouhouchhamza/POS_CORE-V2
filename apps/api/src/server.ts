@@ -56,9 +56,9 @@ import {
   cashRegisterOpenSchema,
   cashRegisterCloseSchema,
   cashRegisterSessionQuerySchema,
-} from "@bimik/validation";
+} from "@corepos/validation";
 import { extractPdfText, MenuPdfError } from "./menu-import/pdf.js";
-import type { Role } from '@bimik/shared-types';
+import type { Role } from '@corepos/shared-types';
 import { registerCoreV2Routes } from './core-v2/routes.js';
 import { registerLicenseRoutes } from './license/routes.js';
 import { MENU_PDF_MAX_BYTES, normalizeMatchName, parseMenuLayout } from "./menu-import/parser.js";
@@ -1131,6 +1131,7 @@ app.post(
     reply.code(409).send({
       message:
         "Printing is performed locally by the CorePOS desktop client.",
+      code: "PRINT_BRIDGE_UNAVAILABLE",
     }),
 );
 
@@ -1588,8 +1589,8 @@ const booleanSettingKeys = new Set([
   "fallback_browser_print",
 ]);
 const settingDefaults: Record<string, string | number | boolean> = {
-  cafe_name: "Bimik_Cafe", cafe_subtitle: "Stock & caisse", cafe_address: "HAY ADRAR",
-  cafe_phone: "", wifi_name: "Bimik_Cafe", wifi_code: "", ticket_header: "BIMIK Café Bimik",
+  cafe_name: "CorePOS", cafe_subtitle: "Stock & caisse", cafe_address: "",
+  cafe_phone: "", wifi_name: "", wifi_code: "", ticket_header: "CorePOS",
   ticket_footer: "NOUS VOUS REMERCIONS POUR VOTRE VISITE", ticket_note: "",
   show_wifi_on_ticket: true, show_phone_on_ticket: false, show_address_on_ticket: true,
   ticket_width: 80, auto_print_after_order: false, open_ticket_after_order: true,

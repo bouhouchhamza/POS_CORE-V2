@@ -3,9 +3,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance,FastifyReply,FastifyRequest } from 'fastify';
 import bcrypt from 'bcryptjs';
 import {z} from 'zod';
-import { commercialCertificateSchema,offlineRequestSchema,businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@bimik/validation';
+import { commercialCertificateSchema,offlineRequestSchema,businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@corepos/validation';
 import {fingerprint,verifyCertificate,type LicenseCertificate} from '../license/crypto.js';
-import {offlineProofPayload} from '@bimik/shared-types';
+import {offlineProofPayload} from '@corepos/shared-types';
 import {businessTypeAllowed,certificateIsCurrent,certificateStatus} from '../license/policy.js';
 import {readLocalCertificate as storedCertificate} from '../license/local-certificate.js';
 
@@ -264,10 +264,10 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
   });
 
 
-  app.post('/api/license/activate',{preHandler:activationAdmin},async(r,p)=>{
+  app.post('/api/license/activate',{preHandler:activationAdmin,config:{rateLimit:{max:10,timeWindow:'1 minute'}}},async(r,p)=>{
 
     const input=z.object({
-      license_key:z.string().min(20).max(200),
+      license_key:z.string().min(18).max(200),
       installation_id:z.string().uuid(),
       device_public_key:z.string().min(40).max(5000),
       device_name:z.string().min(1).max(200),
@@ -295,7 +295,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
     }catch{
       return p.code(503).send({
         message:'License server is unavailable.',
-        code:'LICENSE_SERVER_UNAVAILABLE'
+        code:'ACTIVATION_SERVER_UNAVAILABLE'
       });
     }
 

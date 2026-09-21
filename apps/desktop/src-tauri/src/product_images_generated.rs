@@ -399,7 +399,7 @@ pub(crate) static PRODUCT_IMAGES: &[BundledProductImage] = &[
     },
     BundledProductImage {
         product_id: 57,
-        product_name: "Special BIMIK",
+        product_name: "Special CorePOS",
         file_name: "bimik-bundled-057_special-bimik.png",
         image_url: "/uploads/products/bimik-bundled-057_special-bimik.png",
         bytes: include_bytes!("../resources/product-images/bimik-bundled-057_special-bimik.png"),
@@ -518,7 +518,7 @@ pub(crate) static PRODUCT_IMAGES: &[BundledProductImage] = &[
     },
     BundledProductImage {
         product_id: 74,
-        product_name: "Maqula BIMIK",
+        product_name: "Maqula CorePOS",
         file_name: "bimik-bundled-074_maqula-bimik.png",
         image_url: "/uploads/products/bimik-bundled-074_maqula-bimik.png",
         bytes: include_bytes!("../resources/product-images/bimik-bundled-074_maqula-bimik.png"),

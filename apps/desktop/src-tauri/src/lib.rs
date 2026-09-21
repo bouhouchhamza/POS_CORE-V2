@@ -1,13 +1,34 @@
 #[cfg(test)]
 mod product_images_generated;
-#[derive(Debug, thiserror::Error)]
-enum PrintError {
-    #[error("Receipt payload is empty or too large")]
-    InvalidPayload,
-    #[error("Printer name is invalid")]
-    InvalidPrinter,
-    #[error("Native printing is available only on Windows builds")]
-    Unsupported,
+#[derive(Clone, Debug, serde::Serialize, thiserror::Error)]
+#[error("{message}")]
+struct PrintCommandError {
+    code: &'static str,
+    message: String,
+}
+
+impl PrintCommandError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self { code, message: message.into() }
+    }
+
+    fn print_failure(error: impl std::fmt::Display) -> Self {
+        let message = error.to_string();
+        let normalized = message.to_lowercase();
+        let code = if normalized.contains("offline") || normalized.contains("not ready") {
+            "PRINTER_OFFLINE"
+        } else if normalized.contains("not found")
+            || normalized.contains("does not exist")
+            || normalized.contains("unknown printer")
+        {
+            "PRINTER_NOT_FOUND"
+        } else if normalized.contains("access") || normalized.contains("permission") {
+            "PRINT_PERMISSION_DENIED"
+        } else {
+            "PRINT_FAILED"
+        };
+        Self::new(code, "The receipt could not be printed.")
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
@@ -38,13 +59,17 @@ fn is_virtual_printer(printer: &PrinterInfo) -> bool {
 fn resolve_printer(
     printers: &[PrinterInfo],
     configured: Option<&str>,
-) -> Result<PrinterInfo, String> {
+) -> Result<PrinterInfo, PrintCommandError> {
     if let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) {
         if let Some(printer) = printers.iter().find(|printer| {
             printer.name.eq_ignore_ascii_case(configured) && !is_virtual_printer(printer)
         }) {
             return Ok(printer.clone());
         }
+        return Err(PrintCommandError::new(
+            "PRINTER_NOT_FOUND",
+            "The configured printer is not available.",
+        ));
     }
 
     let eligible: Vec<&PrinterInfo> = printers
@@ -65,7 +90,7 @@ fn resolve_printer(
         return Ok(strong[0].clone());
     }
     if strong.len() > 1 {
-        return Err("Plusieurs imprimantes POS-80 ont été détectées. Sélectionnez-en une dans les paramètres.".into());
+        return Err(PrintCommandError::new("PRINTER_NOT_CONFIGURED", "Select a printer in Settings."));
     }
 
     let plausible: Vec<&PrinterInfo> = eligible
@@ -80,8 +105,8 @@ fn resolve_printer(
 
     match plausible.as_slice() {
         [printer] => Ok((*printer).clone()),
-        [] => Err("Aucune imprimante thermique POS-80 reconnue par Windows. Installez d'abord la file et le pilote POS-80.".into()),
-        _ => Err("Plusieurs imprimantes thermiques possibles ont été détectées. Sélectionnez-en une dans les paramètres.".into()),
+        [] => Err(PrintCommandError::new("PRINTER_NOT_CONFIGURED", "No thermal printer is configured.")),
+        _ => Err(PrintCommandError::new("PRINTER_NOT_CONFIGURED", "Select a printer in Settings.")),
     }
 }
 
@@ -983,26 +1008,26 @@ fn sign_license_device_payload(payload: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn print_receipt(printer_name: String, receipt_text: String, copies: u8) -> Result<(), String> {
+fn print_receipt(printer_name: String, receipt_text: String, copies: u8) -> Result<(), PrintCommandError> {
     if printer_name.trim().is_empty()
         || printer_name.len() > 255
         || printer_name
             .chars()
             .any(|character| matches!(character, '\0' | '\r' | '\n'))
     {
-        return Err(PrintError::InvalidPrinter.to_string());
+        return Err(PrintCommandError::new("PRINTER_NOT_CONFIGURED", "Printer name is invalid."));
     }
     if receipt_text.is_empty() || receipt_text.len() > 64 * 1024 || !(1..=2).contains(&copies) {
-        return Err(PrintError::InvalidPayload.to_string());
+        return Err(PrintCommandError::new("PRINT_FAILED", "Receipt payload is invalid."));
     }
     #[cfg(windows)]
     {
         return windows_print::print(&printer_name, &cp850_receipt(&receipt_text), copies)
-            .map_err(|error| error.to_string());
+            .map_err(PrintCommandError::print_failure);
     }
     #[cfg(not(windows))]
     {
-        Err(PrintError::Unsupported.to_string())
+        Err(PrintCommandError::new("PRINT_BRIDGE_UNAVAILABLE", "Native printing is unavailable."))
     }
 }
 
@@ -1011,59 +1036,59 @@ fn print_receipt_raster(
     printer_name: String,
     raster_base64: String,
     copies: u8,
-) -> Result<(), String> {
+) -> Result<(), PrintCommandError> {
     if printer_name.trim().is_empty()
         || printer_name.len() > 255
         || printer_name
             .chars()
             .any(|character| matches!(character, '\0' | '\r' | '\n'))
     {
-        return Err(PrintError::InvalidPrinter.to_string());
+        return Err(PrintCommandError::new("PRINTER_NOT_CONFIGURED", "Printer name is invalid."));
     }
 
     if raster_base64.is_empty()
         || raster_base64.len() > 3 * 1024 * 1024
         || !(1..=2).contains(&copies)
     {
-        return Err(PrintError::InvalidPayload.to_string());
+        return Err(PrintCommandError::new("PRINT_FAILED", "Receipt payload is invalid."));
     }
 
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let bytes = STANDARD
         .decode(raster_base64.as_bytes())
-        .map_err(|_| PrintError::InvalidPayload.to_string())?;
+        .map_err(|_| PrintCommandError::new("PRINT_FAILED", "Receipt payload is invalid."))?;
 
     if !valid_escpos_raster(&bytes) {
-        return Err(PrintError::InvalidPayload.to_string());
+        return Err(PrintCommandError::new("PRINT_FAILED", "Receipt payload is invalid."));
     }
 
     #[cfg(windows)]
     {
         return windows_print::print(&printer_name, &bytes, copies)
-            .map_err(|error| error.to_string());
+            .map_err(PrintCommandError::print_failure);
     }
 
     #[cfg(not(windows))]
     {
-        Err(PrintError::Unsupported.to_string())
+        Err(PrintCommandError::new("PRINT_BRIDGE_UNAVAILABLE", "Native printing is unavailable."))
     }
 }
 
 #[tauri::command]
-fn list_printers() -> Result<Vec<PrinterInfo>, String> {
+fn list_printers() -> Result<Vec<PrinterInfo>, PrintCommandError> {
     #[cfg(windows)]
     {
-        windows_print::list().map_err(|error| error.to_string())
+        windows_print::list().map_err(|_| PrintCommandError::new("PRINT_BRIDGE_UNAVAILABLE", "Windows printer discovery is unavailable."))
     }
     #[cfg(not(windows))]
     {
-        Err(PrintError::Unsupported.to_string())
+        Err(PrintCommandError::new("PRINT_BRIDGE_UNAVAILABLE", "Native printing is unavailable."))
     }
 }
 
 #[tauri::command]
-fn resolve_thermal_printer(configured_printer: Option<String>) -> Result<PrinterInfo, String> {
+fn resolve_thermal_printer(configured_printer: Option<String>) -> Result<PrinterInfo, PrintCommandError> {
     let printers = list_printers()?;
     resolve_printer(&printers, configured_printer.as_deref())
 }
@@ -1530,6 +1555,14 @@ mod tests {
     fn rejects_unsafe_printer_names_and_copy_counts() {
         assert!(print_receipt("bad\nname".into(), "ticket".into(), 1).is_err());
         assert!(print_receipt("printer".into(), "ticket".into(), 3).is_err());
+    }
+
+    #[test]
+    fn classifies_native_printer_failures_without_exposing_system_errors() {
+        assert_eq!(PrintCommandError::print_failure("printer is offline").code, "PRINTER_OFFLINE");
+        assert_eq!(PrintCommandError::print_failure("printer not found").code, "PRINTER_NOT_FOUND");
+        assert_eq!(PrintCommandError::print_failure("access denied").code, "PRINT_PERMISSION_DENIED");
+        assert_eq!(PrintCommandError::print_failure("spooler failed").code, "PRINT_FAILED");
     }
 
     #[test]
@@ -2093,9 +2126,7 @@ mod tests {
                 .name,
             "POS-80 Counter"
         );
-        assert!(resolve_printer(&printers, None)
-            .unwrap_err()
-            .contains("Plusieurs"));
-        assert!(resolve_printer(&[printer("Microsoft XPS Document Writer", "XPS")], None).is_err());
+        assert_eq!(resolve_printer(&printers, None).unwrap_err().code, "PRINTER_NOT_CONFIGURED");
+        assert_eq!(resolve_printer(&[printer("Microsoft XPS Document Writer", "XPS")], None).unwrap_err().code, "PRINTER_NOT_CONFIGURED");
     }
 }

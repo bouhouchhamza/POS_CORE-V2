@@ -3,8 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import argon2 from 'argon2';
 import { z } from 'zod';
-import { businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@bimik/validation';
-import type { FeatureKey,Permission,Role } from '@bimik/shared-types';
+import { businessFeaturesSchema,businessSetupSchema,businessUpdateSchema,orderSchema,purchaseSchema,roomSchema,supplierSchema,tableSchema } from '@corepos/validation';
+import type { FeatureKey,Permission,Role } from '@corepos/shared-types';
 
 type UserContext={id:number;businessId:number;branchId:number|null;role:Role};
 type Dependencies={pool:pg.Pool;authenticate:(request:FastifyRequest,reply:FastifyReply)=>Promise<unknown>;resolveUser:(request:FastifyRequest)=>Promise<UserContext|null>};

@@ -1,4 +1,4 @@
-# Bimik Cafe production operations
+# CorePOS production operations
 
 ## Architecture
 
@@ -26,7 +26,7 @@ Download the selected `.dump` and `.sha256` from private storage, run `sha256sum
 
 ## Development
 
-On Windows PowerShell run `docker compose -f deploy/docker-compose.dev.yml up -d`, `Copy-Item apps/api/.env.example apps/api/.env` once, `npm install`, `npm run db:migrate`, then `npm run dev`. The root script builds both shared workspaces before starting Fastify and Vite. Use `npm run dev:api` or `npm run dev:web` for one side. Vite proxies `/api` and `/uploads` to `127.0.0.1:3000`. Edit the untracked `.env` if the active database is named `bimik_cafe_import`; never commit it.
+On Windows PowerShell run `docker compose -f deploy/docker-compose.dev.yml up -d`, `Copy-Item apps/api/.env.example apps/api/.env` once, `npm install`, `npm run db:migrate`, then `npm run dev`. The root script builds both shared workspaces before starting Fastify and Vite. Use `npm run dev:api` or `npm run dev:web` for one side. Vite proxies `/api` and `/uploads` to `127.0.0.1:3000`. Edit the untracked `.env` if the active database is named `bimik_cafe_import`; that legacy database identifier is retained for compatibility and must not be renamed in place. Never commit it.
 
 For Tauri, copy `apps/web/.env.desktop.example` to the untracked `apps/web/.env.desktop` and set the hosted HTTPS API. The Tauri build uses Vite desktop mode; the browser build continues to use same-origin `/api`. Routine validation must not publish or build a customer installer.
 

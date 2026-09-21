@@ -1,4 +1,4 @@
-import {commercialCertificateSchema} from '@bimik/validation';
+import {commercialCertificateSchema} from '@corepos/validation';
 import {verifyCertificate} from './crypto.js';
 
 /** Cached commercial claims have no authority until their signature verifies. */

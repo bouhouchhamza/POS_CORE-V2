@@ -45,15 +45,15 @@ The production runtime now starts a root wrapper only long enough to read the mo
 
 ## Verification Run On 2026-09-10
 
-- npm run typecheck -w @bimik/api: PASS
-- npm run test -w @bimik/api: PASS, 46 passed / 0 failed / 16 skipped
-- npm run typecheck -w @bimik/web: PASS
-- npm run test -w @bimik/web: PASS, 4 passed / 0 failed
-- npm run build -w @bimik/web: PASS
-- npm run typecheck -w @bimik/desktop: PASS, warning only for unused PrintError::Unsupported
-- npm run test -w @bimik/desktop: PASS, 13 passed / 0 failed
-- npm run build -w @bimik/desktop: PASS, produced MSI and NSIS setup
-- npm run verify:installer-data-safety -w @bimik/desktop: PASS
+- npm run typecheck -w @corepos/api: PASS
+- npm run test -w @corepos/api: PASS, 46 passed / 0 failed / 16 skipped
+- npm run typecheck -w @corepos/web: PASS
+- npm run test -w @corepos/web: PASS, 4 passed / 0 failed
+- npm run build -w @corepos/web: PASS
+- npm run typecheck -w @corepos/desktop: PASS, warning only for unused PrintError::Unsupported
+- npm run test -w @corepos/desktop: PASS, 13 passed / 0 failed
+- npm run build -w @corepos/desktop: PASS, produced MSI and NSIS setup
+- npm run verify:installer-data-safety -w @corepos/desktop: PASS
 - git diff --check: PASS, line-ending warnings only
 
 Generated installer evidence after rebuild:

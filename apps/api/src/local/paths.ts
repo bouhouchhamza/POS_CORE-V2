@@ -4,13 +4,15 @@ import path from "node:path";
 
 export type LocalPaths={root:string;database:string;uploads:string;logs:string;backups:string;config:string};
 export function resolveLocalPaths(env=process.env):LocalPaths {
+  // These environment variables and paths are persistent compatibility
+  // identifiers. Renaming them would split existing local installations.
   const explicitDatabase=env.BIMIK_DATABASE_PATH?.trim();
-  if(explicitDatabase&&!path.isAbsolute(explicitDatabase))throw new Error("BIMIK_DATABASE_PATH doit être un chemin absolu.");
+  if(explicitDatabase&&!path.isAbsolute(explicitDatabase))throw new Error("Le chemin de base de données local doit être absolu.");
   const database=explicitDatabase?path.normalize(explicitDatabase):undefined;
   const explicitRoot=env.BIMIK_APP_DATA_DIR?.trim()||env.BIMIK_DATA_DIR?.trim();
   const root=path.resolve(explicitRoot||(database?path.dirname(path.dirname(database)):path.join(env.LOCALAPPDATA||env.APPDATA||process.cwd(),"Bimik Cafe")));
   const intendedDatabase=path.join(root,"data","bimik-cafe.sqlite");
-  if(database&&path.resolve(database)!==path.resolve(intendedDatabase))throw new Error("BIMIK_DATABASE_PATH ne correspond pas au dossier AppData Bimik transmis.");
+  if(database&&path.resolve(database)!==path.resolve(intendedDatabase))throw new Error("Le chemin de base de données ne correspond pas au dossier de données local transmis.");
   return {root,database:database??intendedDatabase,uploads:path.join(root,"uploads"),
     logs:path.join(root,"logs"),backups:path.join(root,"backups"),config:path.join(root,"config","local.json")};
 }

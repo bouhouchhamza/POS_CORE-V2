@@ -32,7 +32,7 @@ export async function extractPdfText(bytes: Buffer): Promise<ExtractedPdf> {
     });
     document = await loadingTask.promise;
   } catch (error) {
-    console.error("[BIMIK PDF IMPORT ERROR]", error);
+    console.error("[CorePOS PDF IMPORT ERROR]", error);
     throw new MenuPdfError(
       "INVALID_PDF",
       "Le PDF est endommagé ou illisible.",

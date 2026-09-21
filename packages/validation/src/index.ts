@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { businessTypes, featureKeys, roleKeys } from '@bimik/shared-types';
+import { businessTypes, featureKeys, roleKeys } from '@corepos/shared-types';
 export const featureKeySchema=z.enum(featureKeys);
 export const businessTypeSchema=z.enum(businessTypes);
 const offlineDeviceFacts={installation_id:z.string().uuid(),device_public_key:z.string().min(40).max(5000),device_name:z.string().min(1).max(200),app_version:z.string().min(1).max(100),nonce:z.string().min(16).max(200),requested_at:z.string().datetime(),device_proof:z.string().min(40).max(500)};

@@ -4,9 +4,9 @@ import { Check,ChevronLeft,ChevronRight } from 'lucide-react'
 import { completeSetup } from '../api/core-v2'
 import type {BusinessType,FeatureKey} from '../types'
 import { getApiErrorMessage } from '../utils/format'
-import {commercialCertificateSchema} from '@bimik/validation'
+import {commercialCertificateSchema} from '@corepos/validation'
 import {getLicenseStatus} from '../api/license'
-import {featureKeys} from '@bimik/shared-types'
+import {featureKeys} from '@corepos/shared-types'
 
 import {useI18n,type Language} from '../i18n'
 

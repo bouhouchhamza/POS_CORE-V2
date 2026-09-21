@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { businessTypes, featureKeys } from '@bimik/shared-types'
-import { offlineRequestSchema } from '@bimik/validation'
+import { businessTypes, featureKeys } from '@corepos/shared-types'
+import { offlineRequestSchema } from '@corepos/validation'
 import { vendorApi } from '../api/license'
 
 type MainSection = 'dashboard'|'customers'|'licenses'|'devices'|'advanced'
@@ -86,6 +86,7 @@ type Dashboard = {
 }
 
 type OneTimeBundle = {
+  licenseId?:string
   provisioningKey?:string
   provisioningExpiresAt?:string|null
   licenseKey?:string
@@ -93,12 +94,16 @@ type OneTimeBundle = {
   activationChannel?:string
   customerName?:string
   businessName?:string
+  activeDevices?:number
+  maxDevices?:number
+  licenseStatus?:string
 }
 
 type OnboardingResponse = {
   provisioning?: { provisioning_key?: string; expires_at?: string | null }
   license_key?: string
   activation?: { expires_at?: string | null; channel?: string }
+  license?: { id?:string; max_devices?:number; status?:string }
   customer?: { name?: string }
   business?: { name?: string }
 }
@@ -177,6 +182,34 @@ function provisioningExpiry(licenseExpiry?:string|null){
   const value = licence ? Math.min(automatic,licence) : automatic
   if(value <= Date.now()) throw new Error('Cette licence est expiree.')
   return new Date(value).toISOString()
+}
+
+function CustomerActivationCard({bundle,busy,onClose,onRegenerate,onDisable,onViewDevices}:{bundle:OneTimeBundle;busy:boolean;onClose:()=>void;onRegenerate?:()=>Promise<void>;onDisable?:()=>Promise<void>;onViewDevices?:()=>Promise<void>}){
+  const activationMessage = [
+    'CorePOS',
+    bundle.businessName ? `Business: ${bundle.businessName}` : '',
+    bundle.licenseKey ? `Activation code: ${bundle.licenseKey}` : '',
+    bundle.activationExpiresAt ? `Valid until: ${date(bundle.activationExpiresAt)}` : '',
+  ].filter(Boolean).join('\n')
+  const exportMessage = [
+    bundle.customerName??'',
+    bundle.businessName??'',
+    bundle.provisioningKey?`Provisioning (usage unique): ${bundle.provisioningKey}`:'',
+    bundle.licenseKey?`Activation ${bundle.activationChannel??'desktop'} (usage unique): ${bundle.licenseKey}`:'',
+  ].filter(Boolean).join('\n')
+
+  return <div className="modal-backdrop"><section aria-modal="true" className="modal-content vendor-key-modal" role="dialog">
+    <header className="vendor-activation-card-head"><div><small>CorePOS</small><h3>Code d’activation client</h3></div><span className="badge success">{bundle.licenseStatus??'active'}</span></header>
+    <div className="vendor-activation-facts">
+      <span><small>Business</small><strong>{bundle.businessName??'-'}</strong>{bundle.customerName?<em>{bundle.customerName}</em>:null}</span>
+      <span><small>Appareils</small><strong>{bundle.activeDevices??0} / {bundle.maxDevices??'-'} activés</strong></span>
+    </div>
+    {bundle.provisioningKey?<section className="vendor-activation-code-block"><small>Code d’installation web</small><code dir="ltr">{bundle.provisioningKey}</code><p>À utiliser une seule fois avant le {date(bundle.provisioningExpiresAt)}.</p><button className="button secondary" onClick={()=>void navigator.clipboard.writeText(bundle.provisioningKey!)}>Copier le code client</button></section>:null}
+    {bundle.licenseKey?<section className="vendor-activation-code-block primary"><small>Code d’activation {bundle.activationChannel??'desktop'}</small><code dir="ltr">{bundle.licenseKey}</code><p>Usage unique. Valide jusqu’au {date(bundle.activationExpiresAt)}.</p><div className="modal-actions"><button className="button" onClick={()=>void navigator.clipboard.writeText(bundle.licenseKey!)}>Copier le code</button><button className="button secondary" onClick={()=>window.open(`https://wa.me/?text=${encodeURIComponent(activationMessage)}`,'_blank','noopener,noreferrer')}>Envoyer par WhatsApp</button></div></section>:null}
+    <p className="vendor-secret-note">Le code lisible est affiché une seule fois. Seule son empreinte sécurisée est conservée.</p>
+    {bundle.licenseId?<div className="modal-actions vendor-activation-actions"><button className="button secondary" disabled={busy} onClick={()=>void onRegenerate?.()}>Régénérer le code</button><button className="button secondary" disabled={busy||bundle.licenseStatus!=='active'} onClick={()=>void onDisable?.()}>Désactiver</button><button className="button secondary" disabled={busy} onClick={()=>void onViewDevices?.()}>Voir les appareils</button></div>:null}
+    <div className="modal-actions"><button className="button secondary" onClick={()=>download('CorePOS-code-client.txt',exportMessage)}>Télécharger .txt</button><button className="button" onClick={onClose}>J’ai conservé le code</button></div>
+  </section></div>
 }
 
 export default function VendorAdminPage(){
@@ -306,13 +339,17 @@ export default function VendorAdminPage(){
         offline_validity_days:onboarding.offline_validity_days
       })
       setOneTime({
+        licenseId:created.license?.id,
         provisioningKey:created.provisioning?.provisioning_key,
         provisioningExpiresAt:created.provisioning?.expires_at,
         licenseKey:created.license_key,
         activationExpiresAt:created.activation?.expires_at??null,
         activationChannel:created.activation?.channel??'desktop',
         customerName:created.customer?.name,
-        businessName:created.business?.name
+        businessName:created.business?.name,
+        activeDevices:0,
+        maxDevices:created.license?.max_devices??plans.find(item=>item.id===onboarding.plan_id)?.default_device_limit??1,
+        licenseStatus:created.license?.status??'active'
       })
       setModal(null); setSuccess('Client, business et licence crees. Le code client est pret.')
       await references(); await loadDashboard()
@@ -355,7 +392,7 @@ export default function VendorAdminPage(){
         offline_validity_days:license.offline_validity_days,
         notes:license.notes||null
       })
-      setOneTime({licenseKey:created.license_key,activationExpiresAt:created.activation?.expires_at??null,activationChannel:created.activation?.channel??'desktop',businessName:created.vendor_business_name??undefined,customerName:created.customer_name})
+      setOneTime({licenseId:created.id,licenseKey:created.license_key,activationExpiresAt:created.activation?.expires_at??null,activationChannel:created.activation?.channel??'desktop',businessName:created.vendor_business_name??undefined,customerName:created.customer_name,activeDevices:Number(created.active_devices??0),maxDevices:Number(created.max_devices??0),licenseStatus:created.status??'active'})
       setLicense({...emptyLicense}); setModal(null); setSuccess('Licence creee.')
       await load('licenses')
     }catch(value){fail(value)}finally{setLoading(false)}
@@ -403,20 +440,24 @@ export default function VendorAdminPage(){
   }
 
   async function issueActivationFor(item:Row,channel:'desktop'|'web'|'mobile'='desktop'){
+    if(!confirm("Générer un nouveau code ? Les anciens codes non utilisés seront invalidés. Les appareils déjà activés resteront actifs."))return
     setLoading(true); clearMessages()
     try{
-      const created=await vendorApi.post<ActivationCodeResponse>('/activation-codes',{
-        license_id:item.id,
+      const created=await vendorApi.post<ActivationCodeResponse>(`/licenses/${item.id}/activation-code/regenerate`,{
         channel,
         ttl_hours:24,
         notes:`Code ${channel} genere depuis Vendor Console`
       })
       setOneTime({
+        licenseId:item.id,
         licenseKey:created.activation_code,
         activationExpiresAt:created.expires_at,
         activationChannel:created.channel??channel,
         businessName:created.vendor_business_name,
-        customerName:created.customer_name
+        customerName:created.customer_name,
+        activeDevices:Number(item.active_devices??0),
+        maxDevices:Number(item.max_devices??0),
+        licenseStatus:item.status??'active'
       })
       setSuccess(`Code d'activation ${channel} genere. Il est utilisable une seule fois.`)
       if(section==='advanced'&&advancedSection==='activation-codes') await loadAdvanced('activation-codes')
@@ -431,6 +472,37 @@ export default function VendorAdminPage(){
   async function revokeDevice(id:string){
     if(!confirm("Revoquer cet appareil ? Le slot sera libere."))return
     try{ await vendorApi.post(`/devices/${id}/revoke`,{}); await load('devices'); setSuccess('Appareil revoque. Le slot est disponible.') }catch(value){fail(value)}
+  }
+
+  async function regenerateOneTimeActivation(){
+    if(!oneTime?.licenseId)return
+    if(!confirm("Générer un nouveau code ? Les anciens codes non utilisés seront invalidés. Les appareils déjà activés resteront actifs."))return
+    setLoading(true); clearMessages()
+    try{
+      const created=await vendorApi.post<ActivationCodeResponse>(`/licenses/${oneTime.licenseId}/activation-code/regenerate`,{
+        channel:'desktop',ttl_hours:24,notes:'Code desktop régénéré depuis la carte client'
+      })
+      setOneTime(current=>current?{...current,licenseKey:created.activation_code,activationExpiresAt:created.expires_at,activationChannel:created.channel??'desktop',businessName:created.vendor_business_name??current.businessName,customerName:created.customer_name??current.customerName}:current)
+      await load('licenses')
+      setSuccess("Nouveau code d’activation généré. Les appareils déjà activés restent actifs.")
+    }catch(value){fail(value)}finally{setLoading(false)}
+  }
+
+  async function disableOneTimeLicense(){
+    if(!oneTime?.licenseId)return
+    if(!confirm('Désactiver cette licence ? Les appareils existants ne sont pas supprimés.'))return
+    setLoading(true); clearMessages()
+    try{
+      await vendorApi.post(`/licenses/${oneTime.licenseId}/suspend`,{})
+      setOneTime(current=>current?{...current,licenseStatus:'suspended'}:current)
+      await load('licenses')
+      setSuccess('Licence désactivée.')
+    }catch(value){fail(value)}finally{setLoading(false)}
+  }
+
+  async function viewOneTimeDevices(){
+    setOneTime(null)
+    await load('devices')
   }
 
   async function importRequest(file:File){
@@ -465,7 +537,7 @@ export default function VendorAdminPage(){
 
   function licenseTable(){
     if(!rows.length)return <div className="vendor-empty">Aucune licence.</div>
-    return <div className="table-wrap"><table><thead><tr><th>Client / Business</th><th>Plan</th><th>Statut</th><th>Expiration</th><th>Hors ligne</th><th>Appareils</th><th>Workspace</th><th>Actions</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td><strong>{r.vendor_business_name??'-'}</strong><br/><small>{r.customer_name??'-'}</small></td><td>{r.plan_name??r.plan_code??'-'}</td><td>{badge(r.status)}</td><td>{expiryLabel(r.expires_at)}</td><td>{offlineLabel(r.offline_validity_days)}</td><td><strong>{r.active_devices??0}/{r.max_devices??0}</strong><br/><small>POS {r.active_desktop_devices??0}/{r.max_desktop_devices??'∞'} · Web {r.active_web_devices??0}/{r.max_web_devices??'∞'} · Mobile {r.active_mobile_devices??0}/{r.max_mobile_devices??'∞'}</small></td><td>{r.tenant_slug?<><code>{r.tenant_slug}</code><br/><small>{r.tenant_status??'-'}</small></>:'-'}</td><td><div className="vendor-row-actions">{r.status==='active'&&!r.runtime_business_id?<button className="button" onClick={()=>void issueProvisioningFor(r)}>Code client</button>:r.runtime_business_id?<span className="badge success">Deja provisionne</span>:null}{r.status==='active'&&(r.expires_at==null||(parsedDate(r.expires_at)?.getTime()??0)>Date.now())?<button className="button secondary" onClick={()=>void issueActivationFor(r,'desktop')}>Code Desktop</button>:null}<button className="button secondary" onClick={()=>{setRenewTarget(r);setRenewDuration(r.expires_at==null?'lifetime':'custom');setRenewCustom(r.expires_at?.slice(0,16)??'');setRenewOfflineDays(r.offline_validity_days??null);setModal('renew')}}>Modifier</button>{r.status==='active'?<button className="button secondary" onClick={()=>void licenseAction(r.id,'suspend')}>Suspendre</button>:r.status==='suspended'?<button className="button secondary" onClick={()=>void licenseAction(r.id,'reactivate')}>Reactiver</button>:null}{r.status!=='revoked'?<button className="button danger" onClick={()=>void licenseAction(r.id,'revoke')}>Revoquer</button>:null}</div></td></tr>)}</tbody></table></div>
+    return <div className="table-wrap"><table><thead><tr><th>Client / Business</th><th>Plan</th><th>Statut</th><th>Expiration</th><th>Hors ligne</th><th>Appareils</th><th>Workspace</th><th>Actions</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td><strong>{r.vendor_business_name??'-'}</strong><br/><small>{r.customer_name??'-'}</small></td><td>{r.plan_name??r.plan_code??'-'}</td><td>{badge(r.status)}</td><td>{expiryLabel(r.expires_at)}</td><td>{offlineLabel(r.offline_validity_days)}</td><td><strong>{r.active_devices??0}/{r.max_devices??0}</strong><br/><small>POS {r.active_desktop_devices??0}/{r.max_desktop_devices??'∞'} · Web {r.active_web_devices??0}/{r.max_web_devices??'∞'} · Mobile {r.active_mobile_devices??0}/{r.max_mobile_devices??'∞'}</small></td><td>{r.tenant_slug?<><code>{r.tenant_slug}</code><br/><small>{r.tenant_status??'-'}</small></>:'-'}</td><td><div className="vendor-row-actions">{r.status==='active'&&!r.runtime_business_id?<button className="button" onClick={()=>void issueProvisioningFor(r)}>Code client</button>:r.runtime_business_id?<span className="badge success">Deja provisionne</span>:null}{r.status==='active'&&(r.expires_at==null||(parsedDate(r.expires_at)?.getTime()??0)>Date.now())?<button className="button secondary" onClick={()=>void issueActivationFor(r,'desktop')}>Régénérer le code</button>:null}<button className="button secondary" onClick={()=>{setRenewTarget(r);setRenewDuration(r.expires_at==null?'lifetime':'custom');setRenewCustom(r.expires_at?.slice(0,16)??'');setRenewOfflineDays(r.offline_validity_days??null);setModal('renew')}}>Modifier</button>{r.status==='active'?<button className="button secondary" onClick={()=>void licenseAction(r.id,'suspend')}>Suspendre</button>:r.status==='suspended'?<button className="button secondary" onClick={()=>void licenseAction(r.id,'reactivate')}>Reactiver</button>:null}{r.status!=='revoked'?<button className="button danger" onClick={()=>void licenseAction(r.id,'revoke')}>Revoquer</button>:null}</div></td></tr>)}</tbody></table></div>
   }
 
   function deviceTable(){
@@ -509,6 +581,6 @@ export default function VendorAdminPage(){
       {modal==='renew'?<form onSubmit={submitRenew}><h3>Modifier la licence</h3><p><strong>{renewTarget?.vendor_business_name}</strong> - {renewTarget?.customer_name}</p><fieldset className="vendor-policy-field"><legend>Duree de la licence</legend><label><input checked={renewDuration==='lifetime'} name="renew-duration" onChange={()=>setRenewDuration('lifetime')} type="radio"/> À vie</label><label><input checked={renewDuration==='custom'} name="renew-duration" onChange={()=>setRenewDuration('custom')} type="radio"/> Date d'expiration</label>{renewDuration==='custom'?<label>Date d'expiration<input required type="datetime-local" value={renewCustom} onChange={e=>setRenewCustom(e.target.value)}/></label>:null}</fieldset><fieldset className="vendor-policy-field"><legend>Fonctionnement hors ligne</legend><label><input checked={renewOfflineDays===null} name="renew-offline" onChange={()=>setRenewOfflineDays(null)} type="radio"/> Permanent</label><label><input checked={renewOfflineDays!==null} name="renew-offline" onChange={()=>setRenewOfflineDays(30)} type="radio"/> Limité</label>{renewOfflineDays!==null?<label>Durée hors ligne (jours)<input min="1" required type="number" value={renewOfflineDays} onChange={e=>setRenewOfflineDays(Math.max(1,Number(e.target.value)||1))}/></label>:null}</fieldset><div className="modal-actions"><button className="button secondary" type="button" onClick={()=>{setRenewTarget(null);setModal(null)}}>Annuler</button><button className="button">Enregistrer</button></div></form>:null}
     </div></div>:null}
 
-    {oneTime?<div className="modal-backdrop"><div className="modal-content vendor-key-modal"><h3>Code confidentiel - affiche une seule fois</h3><p>Copiez-le maintenant. Le Vendor Console ne stocke jamais sa version lisible.</p>{oneTime.businessName?<p><strong>{oneTime.customerName??''}</strong>{oneTime.customerName?' - ':''}{oneTime.businessName}</p>:null}{oneTime.provisioningKey?<><h4>Code d'installation client</h4><p>A envoyer au client pour la page /provision. Expiration: {date(oneTime.provisioningExpiresAt)}</p><code>{oneTime.provisioningKey}</code><div className="modal-actions"><button className="button secondary" onClick={()=>void navigator.clipboard.writeText(oneTime.provisioningKey!)}>Copier le code client</button></div></>:null}{oneTime.licenseKey?<><h4>Code d'activation {oneTime.activationChannel??'desktop'}</h4><p>Usage unique. Expiration: {date(oneTime.activationExpiresAt)}. Une fois utilise, ce code ne sera plus accepte.</p><code>{oneTime.licenseKey}</code><div className="modal-actions"><button className="button secondary" onClick={()=>void navigator.clipboard.writeText(oneTime.licenseKey!)}>Copier le code d'activation</button></div></>:null}<div className="modal-actions"><button className="button secondary" onClick={()=>download('CorePOS-code-client.txt',`${oneTime.customerName??''}\n${oneTime.businessName??''}\n${oneTime.provisioningKey?`Provisioning (usage unique): ${oneTime.provisioningKey}\n`:''}${oneTime.licenseKey?`Activation ${oneTime.activationChannel??'desktop'} (usage unique): ${oneTime.licenseKey}\n`:''}`)}>Telecharger .txt</button><button className="button" onClick={()=>setOneTime(null)}>J'ai conserve le code</button></div></div></div>:null}
+    {oneTime?<CustomerActivationCard bundle={oneTime} busy={loading} onClose={()=>setOneTime(null)} onRegenerate={regenerateOneTimeActivation} onDisable={disableOneTimeLicense} onViewDevices={viewOneTimeDevices}/>:null}
   </main>
 }

@@ -2439,6 +2439,27 @@ tbody tr:hover {
     visibility: hidden !important;
   }
 
+  body.restaurant-print-mode .restaurant-receipt,
+  body.restaurant-print-mode .restaurant-receipt * {
+    visibility: visible !important;
+  }
+
+  body.restaurant-print-mode .restaurant-receipt {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 80mm;
+    max-width: 80mm;
+    padding: 4mm;
+    border: 0;
+    background: #fff;
+    box-shadow: none;
+  }
+
+  body.restaurant-print-mode .restaurant-receipt .button,
+  body.restaurant-print-mode .printer-error-notice {
+    display: none !important;
+  }
+
   body.table-qr-print-mode #root,
   body.table-qr-print-mode .app-shell,
   body.table-qr-print-mode .main-shell,
@@ -3362,11 +3383,22 @@ textarea {
 .vendor-feature-grid label{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid var(--border);border-radius:6px;font-weight:600}
 .vendor-key-modal{width:min(620px,calc(100vw - 32px))}
 .vendor-key-modal>code{display:block;padding:14px;background:#f6f3ef;border:1px solid var(--border);border-radius:6px;overflow-wrap:anywhere;font-size:.9rem}
+.vendor-activation-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.vendor-activation-card-head h3{margin:3px 0 0}.vendor-activation-card-head small{color:var(--muted);font-weight:800}
+.vendor-activation-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}
+.vendor-activation-facts>span{display:grid;gap:3px;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--cream)}
+.vendor-activation-facts small,.vendor-activation-code-block>small{color:var(--muted);font-size:.72rem;font-weight:900;text-transform:uppercase}
+.vendor-activation-facts em{color:var(--muted);font-size:.8rem;font-style:normal}
+.vendor-activation-code-block{display:grid;gap:9px;margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:9px}
+.vendor-activation-code-block.primary{border-color:#d9b99d;background:#fffaf4}
+.vendor-activation-code-block code{display:block;max-width:100%;padding:12px;border:1px solid var(--border);border-radius:7px;background:#fff;overflow-wrap:anywhere;direction:ltr;unicode-bidi:isolate;text-align:center;font-size:clamp(1rem,4vw,1.35rem);font-weight:900;letter-spacing:.07em}
+.vendor-activation-code-block p,.vendor-secret-note{margin:0;color:var(--muted);font-size:.82rem;line-height:1.45}
+.vendor-secret-note{margin-top:12px}
 .vendor-offline{display:grid;gap:18px;max-width:820px}
 .vendor-request-details{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--border)}
 .vendor-request-details p{margin:0;overflow-wrap:anywhere}
 .success-message{padding:10px 12px;border:1px solid #a8d5b4;background:#f2fbf4;color:#246b36;border-radius:6px}
-@media(max-width:760px){.vendor-feature-grid,.vendor-policy-field{grid-template-columns:1fr}.vendor-form-modal{padding:18px}.vendor-table-card{padding:8px}}
+@media(max-width:760px){.vendor-feature-grid,.vendor-policy-field,.vendor-activation-facts{grid-template-columns:1fr}.vendor-form-modal{padding:18px}.vendor-table-card{padding:8px}.vendor-key-modal{width:min(100%,calc(100vw - 20px));padding:16px}.vendor-activation-code-block .modal-actions{align-items:stretch;flex-direction:column}.vendor-activation-code-block .button{width:100%}}
 
 /* 18. Merchant desktop compact-density pass */
 @media screen {
@@ -3449,6 +3481,37 @@ textarea {
     min-height: 36px;
     margin: 10px auto 0;
     padding: 7px 12px;
+  }
+
+  .printer-error-notice {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 11px;
+    border: 1px solid #efc2bd;
+    border-radius: 8px;
+    background: #fff7f6;
+    color: #7f2920;
+    text-align: start;
+  }
+
+  .printer-error-notice p {
+    margin: 0;
+    color: #6f5b56;
+    line-height: 1.4;
+  }
+
+  .printer-error-notice > div {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .printer-error-notice .button {
+    width: auto;
+    min-width: 0;
+    margin: 2px 0 0;
   }
 
   .modal-actions {
@@ -4077,13 +4140,17 @@ textarea {
 /* 19. License activation shell */
 @media screen {
   .license-page.auth-page {
-    padding: 20px;
+    width: 100%;
+    min-width: 0;
+    padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
     align-items: center;
+    overflow-x: clip;
     overflow-y: auto;
   }
 
   .license-shell {
     width: min(900px, 100%);
+    min-width: 0;
     margin: auto;
     padding: 22px;
     border: 1px solid var(--border);
@@ -4094,6 +4161,7 @@ textarea {
 
   .license-topbar {
     display: flex;
+    flex-wrap: wrap;
     gap: 16px;
     align-items: center;
     justify-content: space-between;
@@ -4190,6 +4258,13 @@ textarea {
 
   .license-shell .error-message {
     margin: 0 0 12px;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .license-success {
+    margin-bottom: 12px;
   }
 
   .license-status-card {
@@ -4253,7 +4328,7 @@ textarea {
   }
 
   .license-shell .button {
-    min-height: 36px;
+    min-height: 44px;
     padding: 7px 11px;
     border-radius: 7px;
     font-size: 12px;
@@ -4312,6 +4387,27 @@ textarea {
     font-size: 15px;
   }
 
+  .license-method-title-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .license-online-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: #edf8f0;
+    color: var(--success);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
   .license-method-head p {
     margin: 3px 0 0;
     color: var(--muted);
@@ -4333,7 +4429,7 @@ textarea {
   .license-field select,
   .license-file-field input {
     width: 100%;
-    min-height: 36px;
+    min-height: 44px;
     padding: 7px 9px;
     border: 1px solid var(--border);
     border-radius: 7px;
@@ -4341,6 +4437,41 @@ textarea {
     background: var(--white);
     color: var(--text);
     font-size: 12px;
+  }
+
+  .license-code-field {
+    width: 100%;
+    max-width: 590px;
+  }
+
+  .license-code-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .license-code-control input {
+    min-width: 0;
+    direction: ltr;
+    unicode-bidi: isolate;
+    text-align: left;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .035em;
+  }
+
+  .license-paste-button {
+    min-width: 64px;
+    min-height: 44px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--ink-soft);
+    color: var(--brown-dark);
+    font-size: 11px;
+    font-weight: 800;
   }
 
   .license-field input:focus,
@@ -4409,7 +4540,7 @@ textarea {
   }
 
   .license-offline-card[open] .license-details-hint::after {
-    content: "Masquer";
+    content: attr(data-hide-label);
     font-size: 10px;
   }
 
@@ -4461,12 +4592,12 @@ textarea {
 
 @media screen and (max-width: 760px) {
   .license-page.auth-page {
-    padding: 10px;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
     place-items: start center;
   }
 
   .license-shell {
-    padding: 16px;
+    padding: 14px;
     border-radius: 12px;
   }
 
@@ -4480,13 +4611,18 @@ textarea {
     flex-wrap: wrap;
   }
 
+  .license-status-meta > span {
+    min-width: 0;
+    flex: 1 1 130px;
+  }
+
   .license-primary-action {
     width: 100%;
   }
 
   .license-offline-content {
     grid-template-columns: 1fr;
-    padding-left: 14px;
+    padding-inline: 14px;
   }
 
   .license-file-field {
@@ -4496,18 +4632,49 @@ textarea {
 
 @media screen and (max-width: 480px) {
   .license-topbar {
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
   }
 
   .license-status-pill {
-    max-width: 44%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    grid-column: 1 / -1;
+    justify-self: start;
+    max-width: 100%;
+    white-space: normal;
   }
 
   .license-intro {
-    padding-top: 16px;
+    padding: 14px 0 10px;
+  }
+
+  .license-intro h1 {
+    font-size: 23px;
+  }
+
+  .license-status-card,
+  .license-method-card {
+    padding: 12px;
+  }
+
+  .license-status-card {
+    gap: 10px;
+  }
+
+  .license-method-index {
+    width: 28px;
+    height: 28px;
+  }
+
+  .license-code-control {
+    grid-template-columns: minmax(0, 1fr) 62px;
+  }
+
+  .license-code-control input {
+    padding-inline: 8px;
+    font-size: 12px;
+    letter-spacing: 0;
   }
 
   .license-offline-card > summary {
@@ -4517,6 +4684,23 @@ textarea {
   .license-details-hint {
     grid-column: 2;
   }
+}
+
+html[dir="rtl"] .license-intro,
+html[dir="rtl"] .license-status-card,
+html[dir="rtl"] .license-method-card,
+html[dir="rtl"] .license-field,
+html[dir="rtl"] .license-file-field {
+  text-align: right;
+}
+
+html[dir="rtl"] .license-code-control {
+  direction: ltr;
+}
+
+html[dir="rtl"] .license-code-field > span:first-child,
+html[dir="rtl"] .license-code-field > small {
+  direction: rtl;
 }
 
 /* 20. Commercial shell and cash-register operation */

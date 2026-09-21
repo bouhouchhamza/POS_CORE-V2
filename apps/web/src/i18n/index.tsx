@@ -4,12 +4,14 @@ import { en } from './en'
 import { fr } from './fr'
 import { merchantI18n } from './merchant'
 import { lifecycleI18n } from './lifecycle'
+import { activationI18n } from './activation'
+import { printingI18n } from './printing'
 
 export type Language = 'fr' | 'en' | 'ar'
 const dictionaries = {
-  fr: { ...fr, ...merchantI18n.fr, ...lifecycleI18n.fr },
-  en: { ...en, ...merchantI18n.en, ...lifecycleI18n.en },
-  ar: { ...ar, ...merchantI18n.ar, ...lifecycleI18n.ar },
+  fr: { ...fr, ...merchantI18n.fr, ...lifecycleI18n.fr, ...activationI18n.fr, ...printingI18n.fr },
+  en: { ...en, ...merchantI18n.en, ...lifecycleI18n.en, ...activationI18n.en, ...printingI18n.en },
+  ar: { ...ar, ...merchantI18n.ar, ...lifecycleI18n.ar, ...activationI18n.ar, ...printingI18n.ar },
 }
 const neutralOverrides:Record<Language,Record<string,string>>={
   fr:{'license.typeDetermined':'Déterminé par la licence','license.typeAutomatic':'Le type de commerce et les modules seront configurés automatiquement lors de l’activation.','license.typeBound':'Défini lors de l’activation commerciale.','header.cafeManagement':'Gestion du commerce','settings.subtitle':'Gérez votre commerce, les tickets et les utilisateurs.','settings.cafe':'Informations du commerce','settings.cafeHelp':'Informations affichées dans l\'application et sur les tickets.','settings.addressHelp':'Adresse du commerce sur le ticket','cash.subtitle':'Ouverture, suivi et fermeture de la caisse.','products.trackHelp':'Désactivez le suivi pour les produits ou services gérés sans quantité de stock.'},

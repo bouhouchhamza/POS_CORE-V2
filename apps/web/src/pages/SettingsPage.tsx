@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   defaultSettings,
   getSettings,
@@ -19,6 +20,7 @@ import { getAvailableRoles,getRoleLabel,normalizeRole } from '../auth/roles'
 import {useAuth}from'../auth/useAuth'
 import { useI18n } from '../i18n'
 import { isTauriRuntime, resolveNativePrinter, type NativePrinter } from '../utils/nativePrint'
+import { printErrorMessage } from '../utils/printerErrors'
 import CoreV2BusinessSettings from '../components/CoreV2BusinessSettings'
 
 type SettingKey = keyof AppSettings
@@ -333,6 +335,7 @@ function UsersSettingsSection() {
 }
 
 export default function SettingsPage() {
+  const [searchParams] = useSearchParams()
   const { t } = useI18n()
   const [form, setForm] = useState<AppSettings>(defaultSettings)
   const [isLoading, setIsLoading] = useState(true)
@@ -341,7 +344,7 @@ export default function SettingsPage() {
   const [success, setSuccess] = useState<string | null>(null)
   const [detectedPrinter, setDetectedPrinter] = useState<NativePrinter | null>(null)
   const [isDetectingPrinter, setIsDetectingPrinter] = useState(false)
-  const [activeTab, setActiveTab] = useState<SettingsTab>('commerce')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => searchParams.get('tab') === 'receipt' ? 'receipt' : 'commerce')
 
   useEffect(() => {
     let mounted = true
@@ -385,7 +388,7 @@ export default function SettingsPage() {
       updateField('thermal_printer_name', printer.name)
     } catch (err) {
       setDetectedPrinter(null)
-      setError(getApiErrorMessage(err))
+      setError(printErrorMessage(err, t))
     } finally {
       setIsDetectingPrinter(false)
     }

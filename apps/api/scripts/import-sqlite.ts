@@ -5,7 +5,7 @@ import { db, pool } from "../src/db/index.js";
 import { categories, products, saleItems, sales, settings, stockMovements, users } from "../src/db/schema.js";
 
 const sourceArgument = process.argv[2];
-if (!sourceArgument) throw new Error("Usage: npm run import:sqlite -w @bimik/api -- /path/database.sqlite");
+if (!sourceArgument) throw new Error("Usage: npm run import:sqlite -w @corepos/api -- /path/database.sqlite");
 const source = path.resolve(process.env.INIT_CWD ?? process.cwd(), sourceArgument);
 const sqlite = new DatabaseSync(source, { readOnly: true });
 const names = ["users", "categories", "products", "sales", "sale_items", "stock_movements", "settings"] as const;
