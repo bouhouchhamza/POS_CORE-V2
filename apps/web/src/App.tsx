@@ -24,7 +24,7 @@ import SetupGate from './components/SetupGate';
 import CustomersPage from './pages/CustomersPage';
 import LicensePage from './pages/LicensePage';
 import VendorAdminPage from './pages/VendorAdminPage';
-import ProvisionPage from './pages/ProvisionPage';
+import LegacyProvisionRecoveryPage from './pages/LegacyProvisionRecoveryPage';
 import "./App.css";
 
 function DefaultRedirect() {
@@ -37,7 +37,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/vendor/*" element={<VendorAdminPage />} />
-      <Route path="/provision" element={<ProvisionPage />} />
+      <Route path="/provision" element={<LegacyProvisionRecoveryPage />} />
       <Route element={<SetupGate />}>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/activation" element={<LicensePage />} />

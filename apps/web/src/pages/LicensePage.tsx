@@ -8,7 +8,6 @@ import {
   createOfflineRequest,
   getLicenseStatus,
   importOfflineLicense,
-  revalidateLicense,
   type LicenseStatus,
 } from '../api/license'
 import {
@@ -75,11 +74,6 @@ const importProofPayload = (
   certificateId: string,
   installationId: string,
 ) => ['poslic-import-v1', certificateId, installationId].join('\n')
-const validationProofPayload = (input: Record<string, string>) => [
-  'device-validate-v1', input.license_id, input.certificate_id,
-  input.installation_id, input.device_public_key, input.device_name,
-  input.app_version, input.nonce, input.requested_at,
-].join('\n')
 const download = (name: string, value: unknown) => {
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(value, null, 2)], {
@@ -257,13 +251,6 @@ export default function LicensePage() {
   const [activating, setActivating] = useState(false)
   const [redirect, setRedirect] = useState<string | null>(null)
   const activationInFlight = useRef(false)
-  const certificate = status?.certificate as Record<string, unknown> | undefined
-  const licensedBusinessType=typeof certificate?.business_type==='string'?certificate.business_type:null
-  const hasCommercialDuration = Boolean(certificate && 'expires_at' in certificate)
-  const lifetime = hasCommercialDuration && certificate?.expires_at == null
-  const hasOfflinePolicy = Boolean(certificate && 'offline_validity_days' in certificate)
-  const offlineDays = typeof certificate?.offline_validity_days === 'number' ? certificate.offline_validity_days : null
-  const permanentOffline = hasOfflinePolicy && certificate?.offline_validity_days == null
 
   const load = async () => {
     const next = await getLicenseStatus()
@@ -276,7 +263,7 @@ export default function LicensePage() {
       const setup = await getSetupStatus()
       setStatus({ status: 'active', features: [] })
       setConfigured(setup.configured)
-      const target = setup.configured ? '/login' : '/setup'
+      const target = setup.state === 'SETUP_REQUIRED' ? '/setup' : '/login'
       if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
       else setRedirect(target)
       return
@@ -288,17 +275,17 @@ export default function LicensePage() {
     setStatus(nextStatus)
     setConfigured(setup.configured)
     if (nextStatus.status === 'active' || nextStatus.status === 'development') {
-      const target = setup.configured ? '/login' : '/setup'
+      const target = setup.state === 'SETUP_REQUIRED' ? '/setup' : '/login'
       if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
       else setRedirect(target)
     }
   }
 
   useEffect(() => {
-    // A successful first-time workspace bootstrap explicitly exchanges its
-    // grant in ProvisionPage. Never probe that internal endpoint here: most
-    // activation visits have no grant cookie, and probing caused 401/409 noise
-    // as well as a competing activation path.
+    // Legacy provisioning recovery, when explicitly enabled, performs its
+    // own one-time grant exchange. Normal customer activation must never
+    // probe that internal endpoint: most visits have no grant cookie, and a
+    // probe would create a competing activation path and misleading 401/409s.
     if (!usesLocalDesktopApi()) return
 
     void load().catch((value) => setError(activationErrorMessage(value, t)))
@@ -435,26 +422,6 @@ export default function LicensePage() {
       setActivating(false)
     }
   }
-  async function revalidate(){
-    try{
-      setError(null)
-      const certificate=status?.certificate as Record<string,unknown>|undefined
-      if(!certificate?.license_id||!certificate?.certificate_id)throw new Error(t('license.noCertificate'))
-      const identity=await deviceIdentity(),nonce=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-',''),requested_at=new Date().toISOString()
-      const validationPayload={license_id:String(certificate.license_id),certificate_id:String(certificate.certificate_id),installation_id:identity.installation_id,device_public_key:identity.public_key,device_name:navigator.platform||'CorePOS Desktop',app_version:'2.0.8',nonce,requested_at}
-      const device_proof=await signDevicePayload(validationProofPayload(validationPayload),t('license.desktopOnly'))
-      await revalidateLicense({
-        installation_id:validationPayload.installation_id,
-        device_public_key:validationPayload.device_public_key,
-        device_name:validationPayload.device_name,
-        app_version:validationPayload.app_version,
-        nonce:validationPayload.nonce,
-        requested_at:validationPayload.requested_at,
-        device_proof,
-      })
-      await load()
-    }catch(value){setError(activationErrorMessage(value, t))}
-  }
   async function imported(file: File) {
     if (activationInFlight.current) return
     activationInFlight.current = true
@@ -533,52 +500,6 @@ export default function LicensePage() {
         <ErrorMessage message={error} />
         {success ? <div className="success-message license-success" role="status">{success}</div> : null}
 
-        <article className="license-status-card">
-          <div>
-            <span className="license-section-label">{t('license.currentState')}</span>
-            <strong>{t(`license.status.${status?.status??'loading'}`)}</strong>
-            <p>{t(`license.message.${status?.status??'activation_required'}`)}</p>
-          </div>
-
-          <div className="license-status-meta">
-            {hasCommercialDuration ? (
-              <span>
-                <small>{t('license.expirationLabel')}</small>
-                <strong>
-                  {lifetime ? t('license.lifetime') : new Date(String(certificate?.expires_at)).toLocaleDateString()}
-                </strong>
-              </span>
-            ) : null}
-
-            {hasOfflinePolicy ? (
-              <span>
-                <small>{t('license.offlinePolicy')}</small>
-                <strong>{permanentOffline ? t('license.offlinePermanent') : t('license.offlineDays', { days: offlineDays ?? '-' })}</strong>
-              </span>
-            ) : null}
-
-            {status?.development ? (
-              <span>
-                <small>{t('license.mode')}</small>
-                <strong>{t('license.status.development')}</strong>
-              </span>
-            ) : null}
-          </div>
-
-          {permanentOffline ? <p className="license-helper">{t('license.offlinePermanentHelp')}</p> : null}
-
-          {isTauriRuntime() && status?.certificate ? (
-            <button
-              className="button secondary license-revalidate"
-              disabled={activating}
-              onClick={() => void revalidate()}
-              type="button"
-            >
-              {t('license.validateNow')}
-            </button>
-          ) : null}
-        </article>
-
         <div className="license-activation-grid">
           <form className="license-method-card license-online-card" onSubmit={(event)=>{event.preventDefault();void online()}}>
             <div className="license-method-head">
@@ -644,12 +565,6 @@ export default function LicensePage() {
             </summary>
 
             <div className="license-offline-content">
-              <label className="license-field">
-                <span>{t('license.businessType')}</span>
-                <input readOnly value={licensedBusinessType?t(`businessType.${licensedBusinessType}.title`):t('license.typeDetermined')} />
-              </label>
-              <small className="license-helper">{t(licensedBusinessType?'license.typeBound':'license.typeAutomatic')}</small>
-
               <div className="license-offline-actions">
                 <button
                   className="button secondary"

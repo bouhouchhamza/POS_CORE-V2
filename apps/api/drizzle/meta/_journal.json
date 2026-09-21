@@ -141,6 +141,13 @@
       "when": 1789567260000,
       "tag": "0019_provisioning_activation_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789567320000,
+      "tag": "0020_vendor_business_lifecycle",
+      "breakpoints": true
     }
   ]
 }

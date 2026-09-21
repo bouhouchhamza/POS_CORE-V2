@@ -3302,6 +3302,12 @@ textarea {
   color:var(--brown-dark);
   font-size:2rem;
 }
+.vendor-stat-link{
+  width:100%;
+  text-align:left;
+  cursor:pointer;
+}
+.vendor-stat-link:hover{border-color:#d9b99d;background:#fffaf4}
 .vendor-stat-card span{
   color:var(--muted);
   font-size:.82rem;
@@ -3369,6 +3375,7 @@ textarea {
   .vendor-section-head{align-items:flex-start}
 }
 .vendor-row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vendor-search{width:min(420px,100%);margin:0 0 14px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--white)}
 .vendor-row-actions button{border:1px solid var(--border);background:var(--surface);padding:7px 10px;border-radius:6px;cursor:pointer;font-weight:700}
 .vendor-row-actions button.danger,.button.danger{color:#9f2f24;border-color:#e4b8b3;background:#fff8f7}
 .vendor-form-modal{width:min(760px,calc(100vw - 32px));max-height:90vh;overflow:auto}
@@ -3397,8 +3404,15 @@ textarea {
 .vendor-offline{display:grid;gap:18px;max-width:820px}
 .vendor-request-details{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--border)}
 .vendor-request-details p{margin:0;overflow-wrap:anywhere}
+.vendor-admin[dir="rtl"] .vendor-sidebar{border-right:0;border-left:1px solid var(--border)}
+.vendor-admin[dir="rtl"] .vendor-sidebar nav button{text-align:right}
+.vendor-admin[dir="rtl"] .vendor-sidebar nav button.active{box-shadow:inset -3px 0 0 var(--brown)}
+.vendor-admin[dir="rtl"] .vendor-topbar,.vendor-admin[dir="rtl"] .vendor-section-head,.vendor-admin[dir="rtl"] .vendor-row-actions,.vendor-admin[dir="rtl"] .vendor-activation-card-head{flex-direction:row-reverse}
+.vendor-admin[dir="rtl"] .vendor-summary-line{flex-direction:row-reverse}
+.vendor-admin[dir="rtl"] .vendor-stat-link{text-align:right}
 .success-message{padding:10px 12px;border:1px solid #a8d5b4;background:#f2fbf4;color:#246b36;border-radius:6px}
 @media(max-width:760px){.vendor-feature-grid,.vendor-policy-field,.vendor-activation-facts{grid-template-columns:1fr}.vendor-form-modal{padding:18px}.vendor-table-card{padding:8px}.vendor-key-modal{width:min(100%,calc(100vw - 20px));padding:16px}.vendor-activation-code-block .modal-actions{align-items:stretch;flex-direction:column}.vendor-activation-code-block .button{width:100%}}
+@media(max-width:430px){.vendor-admin-shell{min-width:0}.vendor-topbar{padding:14px;flex-wrap:wrap}.vendor-topbar h1{font-size:1.2rem}.vendor-topbar-actions{width:100%;justify-content:space-between}.vendor-content{padding:14px}.vendor-sidebar nav{grid-template-columns:1fr 1fr}.vendor-sidebar nav button{min-width:0;overflow-wrap:anywhere}.vendor-section-head{gap:10px}.vendor-section-head .vendor-row-actions{width:100%}.vendor-section-head .vendor-row-actions .button{flex:1}.vendor-stats{gap:10px}.vendor-stat-card{padding:14px}.vendor-table-card{overflow-x:auto}.vendor-table-card table{min-width:620px}}
 
 /* 18. Merchant desktop compact-density pass */
 @media screen {

@@ -1,23 +1,33 @@
-# Core POS V2 SaaS tenancy: database per client business
+# CorePOS SaaS tenancy: database per Business
 
-## Control plane
+## Control plane and tenant isolation
 
-The control-plane PostgreSQL database contains Vendor customers, Vendor Businesses, plans, commercial licences, one-time activation/provisioning credentials, registered devices, audit logs, and `saas_tenants`. It is the only database used to decide which operational database belongs to a Vendor Business.
+The control-plane PostgreSQL database owns Vendor Businesses, plans, commercial licences, registered devices, activation-code hashes, audit logs, `saas_tenants`, and the internal `vendor_business_provisioning` recipe. It is the source of truth for Business readiness and device-to-tenant resolution.
 
-## Tenant databases
+With `SAAS_TENANCY_MODE=database_per_tenant`, each ready Business has one tenant database. A visible Business name can produce an immutable technical slug/database identity with a UUID suffix; those values are implementation details and never customer input.
 
-With `SAAS_TENANCY_MODE=database_per_tenant`, each provisioned Vendor Business receives one PostgreSQL database. A visible business name such as `Atlas Café` can produce an immutable technical identity such as `atlas-cafe-a31f7c82` and database `corepos_atlas_cafe_a31f7c82`. The UUID suffix prevents collisions and makes renaming the visible business safe.
+Customer requests never submit a database name, tenant identifier, or workspace slug. After signed device activation, the server validates the HttpOnly device cookie, licence, Vendor Business, and tenant record, then selects the operational database. Merchant JWTs are tenant-bound. Existing tenant headers and legacy slug URLs remain constrained compatibility paths, not an employee-selection flow.
 
-Client requests never provide a database name, tenant ID, or workspace slug. Desktop activation creates a registered Vendor device and the API issues a signed HttpOnly activated-device cookie containing only the device reference. On startup the control plane validates that device, its licence and Vendor Business, resolves `saas_tenants`, and only then establishes the operational database context. JWT access tokens contain the resolved tenant ID and are rejected in another tenant context.
+Public QR flows remain isolated: a public table token resolves through the control plane to one tenant database before a menu query. A customer cannot select a tenant by editing a workspace slug.
 
-Public table QRs contain only a high-entropy table token (`/m/:token`). The control plane stores its SHA-256 hash in `public_table_links`; that binding resolves the tenant database and expected table before any public menu query runs. Internal tenant slugs are not encoded in newly generated QRs.
+## Internal Business preparation
 
-Operational records (users, orders, sales, payments, products, stock, suppliers, purchases, customers, tables, kitchen data, settings and tenant uploads) stay in that client's database/upload namespace. The control plane may keep a minimal shadow `businesses` row solely for backward-compatible control-plane relationships.
+Vendor Business creation persists one replay-safe internal recipe, then:
 
-## Provisioning
+1. Creates the control-plane contact and Business record.
+2. Creates/migrates the tenant database in database-per-tenant mode, or creates the shared runtime Business otherwise.
+3. Bootstraps the owner, primary branch, and allowed default features idempotently.
+4. Creates/assigns the active commercial licence and binds the runtime Business.
+5. Marks preparation complete and exposes `READY_FOR_ACTIVATION`.
 
-The Vendor creates the client, Vendor Business and licence, then may issue a one-time cloud provisioning credential only for initial workspace bootstrap or recovery. When that explicit technical flow consumes it, the API creates/migrates the dedicated database, creates the initial business/branch/patron, stores the tenant registry record, binds the licence, and consumes the provisioning credential in a transaction. The same transaction creates a ten-minute, single-use activation grant bound to that provisioning key, licence, Vendor Business, and tenant. Its opaque value is delivered only in a narrowly scoped HttpOnly cookie and is exchanged for the activated-device cookie by the successful bootstrap screen; `/activation` never calls that endpoint. A consumed provisioning credential cannot create a second workspace.
+No CP activation code is issued until runtime, active licence, and quota configuration are valid. A failure records a machine error code and audit record, yields `PROVISIONING_FAILED`, and can be retried in Vendor Console. Retry does not create a second tenant database, owner, licence, or activation code.
+
+## Compatibility recovery
+
+Historical provisioning credentials and short-lived activation grants remain only for explicit legacy recovery. They are not generated by normal Vendor onboarding and never appear in normal Vendor or customer UI. The legacy customer screen is disabled unless its explicit build flag and recovery URL parameter are present; Vendor key-management endpoints require the bootstrap operator credential.
 
 ## Migration safety
 
-Do not automatically split an existing live shared database without a verified backup and reconciliation. Existing production data must be migrated client by client into a new tenant database, validated for record counts/financial totals/inventory, and only then cut over. Never restore or migrate destructively over the live database.
+Migration `0020_vendor_business_lifecycle.sql` adds only the internal lifecycle-recipe table. It preserves existing control-plane and tenant rows. Apply it to the control-plane database before using the new Vendor creation workflow.
+
+Do not automatically split a live shared database without a verified backup and reconciliation. Migrate one Business at a time, validate record counts/financial totals/inventory, then cut over. Never restore or migrate destructively over a live database.

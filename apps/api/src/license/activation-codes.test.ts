@@ -54,7 +54,9 @@ test('issued activation codes persist only their hash and use the database uniqu
 test('invalid, expired, disabled, consumed, and same-device activation states have stable codes', () => {
   errorCode(() => validateActivationCode(null), 'ACTIVATION_CODE_INVALID');
   errorCode(() => validateActivationCode({ activation_code_expires_at: new Date(Date.now() - 1).toISOString() }), 'ACTIVATION_CODE_EXPIRED');
+  errorCode(() => validateActivationCode({ activation_code_revoked_at: new Date().toISOString() }), 'ACTIVATION_CODE_REVOKED');
   errorCode(() => validateActivationCode({ activation_code_expires_at: new Date(Date.now() + 60_000).toISOString(), vendor_business_status: 'active', status: 'suspended' }), 'LICENSE_DISABLED');
+  errorCode(() => validateActivationCode({ activation_code_expires_at: new Date(Date.now() + 60_000).toISOString(), vendor_business_status: 'active', status: 'active', expires_at: new Date(Date.now() - 1).toISOString() }), 'LICENSE_EXPIRED');
   errorCode(() => validateActivationCode({ activation_code_consumed_at: new Date().toISOString(), activation_code_consumed_installation_id: 'device-a' }, 'device-a'), 'DEVICE_ALREADY_ACTIVATED');
   errorCode(() => validateActivationCode({ activation_code_consumed_at: new Date().toISOString(), activation_code_consumed_installation_id: 'device-a' }, 'device-b'), 'ACTIVATION_CODE_ALREADY_CONSUMED');
 });
