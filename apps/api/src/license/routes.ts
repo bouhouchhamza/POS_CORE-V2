@@ -12,7 +12,7 @@ import{config}from'../config.js'
 import{provisionTenantDatabase,tenantIdentifiers}from'../saas/tenant-provisioning.js'
 import{provisionVendorBusiness,readVendorBusinessLifecycle}from'../saas/vendor-business-provisioning.js'
 import{commercialLifecycle}from'./lifecycle.js'
-import{currentTenant}from'../saas/tenant-context.js'
+import{currentTenant,tenantRuntime}from'../saas/tenant-context.js'
 import{assertDeviceSlotAvailable}from'./device-quota.js'
 import{clearSessionDeviceCookie,sessionChannelForRequest,setSessionDeviceCookie,touchSessionDevice}from'./session-devices.js'
 import{effectiveLicenseStatus,readCommercialLicenseState,resolveRuntimeBusinessIdentity}from'./control-plane.js'
@@ -235,6 +235,36 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
        }
       )
 
+     // A signed desktop certificate contains the minimum local profile
+     // bootstrap snapshot.  It is selected only from the runtime business
+     // already bound to this licence; callers never provide an id or slug.
+     // Password hashes are required for offline local authentication and are
+     // protected by the certificate signature and device binding.
+     const tenant=config.SAAS_TENANCY_MODE==='database_per_tenant'?(await pool.query(
+       `select id,vendor_business_id,control_business_id,slug,database_name,status
+        from saas_tenants where vendor_business_id=$1 and status='active'`,
+       [license.vendor_business_id]
+     )).rows[0]:null
+     if(config.SAAS_TENANCY_MODE==='database_per_tenant'&&!tenant)
+       throw Object.assign(new Error('The tenant runtime is unavailable for local desktop bootstrap.'),{statusCode:409,code:'LOCAL_BOOTSTRAP_UNAVAILABLE'})
+     const bootstrapPool=tenant?tenantRuntime({id:tenant.id,vendorBusinessId:tenant.vendor_business_id,controlBusinessId:tenant.control_business_id,slug:tenant.slug,databaseName:tenant.database_name,status:tenant.status}).pool:operationalPool
+     const runtimeBusiness=(await bootstrapPool.query(
+       `select id,name,logo,currency,locale,timezone
+        from businesses where vendor_business_id=$1 limit 1`,
+       [license.vendor_business_id]
+     )).rows[0]
+     const runtimeBranch=runtimeBusiness?(await bootstrapPool.query(
+       `select name,code,address,phone from branches where business_id=$1 order by id limit 1`,
+       [runtimeBusiness.id]
+     )).rows[0]:null
+     const runtimeUsers=runtimeBusiness?(await bootstrapPool.query(
+       `select name,email,password,role,is_active from users
+        where business_id=$1 and is_active=true order by id limit 100`,
+       [runtimeBusiness.id]
+     )).rows:[]
+     if(!runtimeBusiness||!runtimeBranch||!runtimeUsers.length)
+       throw Object.assign(new Error('The activated Business is not ready for local desktop bootstrap.'),{statusCode:409,code:'LOCAL_BOOTSTRAP_UNAVAILABLE'})
+
      const certificate:LicenseCertificate={
       version:2,
       certificate_id:crypto.randomUUID(),
@@ -254,7 +284,12 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
        ?new Date(license.expires_at).toISOString()
        :null,
       offline_validity_days:
-       license.offline_validity_days
+       license.offline_validity_days,
+      bootstrap:{
+       business:{name:runtimeBusiness.name,logo:runtimeBusiness.logo??null,currency:runtimeBusiness.currency,locale:runtimeBusiness.locale,timezone:runtimeBusiness.timezone},
+       branch:{name:runtimeBranch.name,code:runtimeBranch.code,address:runtimeBranch.address??null,phone:runtimeBranch.phone??null},
+       users:runtimeUsers.map(user=>({name:user.name,email:user.email,password:user.password,role:user.role,is_active:Boolean(user.is_active)}))
+      }
      }
 
      return{

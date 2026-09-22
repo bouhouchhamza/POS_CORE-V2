@@ -31,6 +31,11 @@ export type LicenseCertificateV2={
  issued_at:string
  expires_at:string|null
  offline_validity_days:number|null
+ bootstrap?:{
+  business:{name:string;logo:string|null;currency:string;locale:string;timezone:string}
+  branch:{name:string;code:string;address:string|null;phone:string|null}
+  users:Array<{name:string;email:string;password:string;role:string;is_active:boolean}>
+ }
 }
 
 export type LicenseCertificate=

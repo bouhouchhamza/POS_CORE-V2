@@ -25,6 +25,15 @@ export function routeForLifecycle(
       : { kind: 'redirect', to: '/login' }
   }
 
+  // A commercial Desktop may only reach this state for an older certificate
+  // without its signed local bootstrap snapshot.  Keep it on activation for
+  // recovery/reissue; it must never fall through to the manual setup wizard.
+  if (state === 'LOCAL_BOOTSTRAP_REQUIRED') {
+    return pathname === '/activation'
+      ? { kind: 'render' }
+      : { kind: 'redirect', to: '/activation' }
+  }
+
   if (state === 'READY') {
     return pathname === '/activation' || pathname === '/setup' || pathname === '/login'
       ? { kind: 'redirect', to: '/dashboard' }

@@ -228,7 +228,7 @@ test("offline login rejects disabled users", async () => {
   } finally { await context.app.close(); context.db.close(); fs.rmSync(context.root, { recursive: true, force: true }); }
 });
 
-test("fresh local setup derives Vendor identity, business type, and feature ceiling from certificate v2", async () => {
+test("production local sidecar never exposes manual setup after a certificate is present", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "bimik-license-setup-"));
   const paths = ensureLocalPaths(resolveLocalPaths({ BIMIK_DATA_DIR: root }));
   const db = openLocalDatabase(paths);
@@ -239,14 +239,10 @@ test("fresh local setup derives Vendor identity, business type, and feature ceil
   const app = await buildLocalApp({ paths, database: db });
   const common = { name: "Licensed Library", logo: null, phone: null, address: null, currency: "MAD", locale: "fr-MA", timezone: "Africa/Casablanca" };
   try {
-    const mismatch = await app.inject({ method: "POST", url: "/api/setup", payload: { business: { ...common, business_type: "cafe" }, enabled_features: ["pos"], admin: { name: "Patron", email: "licensed@test.invalid", password: "password1" } } });
-    assert.equal(mismatch.statusCode, 422);
-    const created = await app.inject({ method: "POST", url: "/api/setup", payload: { business: { ...common, business_type: "library" }, enabled_features: ["pos", "inventory", "kitchen"], admin: { name: "Patron", email: "licensed@test.invalid", password: "password1" } } });
-    assert.equal(created.statusCode, 201, created.body);
-    assert.deepEqual(db.prepare("SELECT feature FROM business_features ORDER BY feature").all().map(row=>row.feature),["inventory","pos"]);
-    const stored=db.prepare("SELECT business_type,vendor_business_id FROM businesses").get();
-    assert.equal(stored?.business_type,"library");
-    assert.equal(stored?.vendor_business_id,certificate.vendor_business_id);
+    const blocked = await app.inject({ method: "POST", url: "/api/setup", payload: { business: { ...common, business_type: "library" }, enabled_features: ["pos"], admin: { name: "Patron", email: "licensed@test.invalid", password: "password1" } } });
+    assert.equal(blocked.statusCode, 403, blocked.body);
+    assert.equal(blocked.json().code, 'SETUP_DISABLED_IN_PRODUCTION');
+    assert.equal((await app.inject('/api/setup/status')).json().data.state, 'LOCAL_BOOTSTRAP_REQUIRED');
   } finally { await app.close(); db.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

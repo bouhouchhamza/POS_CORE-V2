@@ -33,7 +33,12 @@ test.before(async () => {
 
 test.beforeEach(async () => {
   if (!enabled) return;
-  await pool.query("truncate refresh_tokens, stock_movements, sale_items, sales, cash_register_sessions, products, categories, users, settings restart identity cascade");
+  // This suite shares the disposable PostgreSQL database with the licensing
+  // integration suites.  Start from the two control-plane/runtime roots, not
+  // only POS tables: a licence device created by a preceding test can otherwise
+  // be selected by tenant resolution and make an unrelated login hit its quota.
+  // `license_plans` deliberately remains seeded by migrations.
+  await pool.query("truncate license_customers, businesses, saas_tenants restart identity cascade");
   // Fresh migrations deliberately do not seed a commercial business. Tests
   // explicitly provision their own licensed tenant, just as production does.
   await pool.query(`insert into license_customers(id,name) values('00000000-0000-4000-8000-000000000001','API test customer') on conflict(id) do nothing`);

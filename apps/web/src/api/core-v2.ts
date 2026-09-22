@@ -1,6 +1,6 @@
 import api,{unwrapData} from './client'
 import type {Business,BusinessType,Customer,FeatureKey,Purchase,PurchaseDetail,PurchaseReturn,RestaurantTable,Room,Supplier,UniversalOrder} from '../types'
-export type LifecycleState='PROVISIONING'|'PROVISIONING_FAILED'|'READY_FOR_ACTIVATION'|'DEVICE_ACTIVATED'|'READY'|'BLOCKED'|'SETUP_REQUIRED'
+export type LifecycleState='PROVISIONING'|'PROVISIONING_FAILED'|'READY_FOR_ACTIVATION'|'LOCAL_BOOTSTRAP_REQUIRED'|'DEVICE_ACTIVATED'|'READY'|'BLOCKED'|'SETUP_REQUIRED'
 export type SetupStatus={state:LifecycleState;reason?:string|null;configured:boolean;requires_license_activation?:boolean;requires_provisioning?:boolean;requires_tenant_selection?:boolean;business:Pick<Business,'id'|'name'|'slug'|'logo'|'business_type'>|null}
 export type ProvisionResolution={vendor_business_name:string;business_type:BusinessType;plan:string|null;allowed_features:FeatureKey[];provisioning_expires_at:string|null;license_expires_at:string|null}
 export type PublicMenuChoice={id:number;name:string;price:number}

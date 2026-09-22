@@ -263,7 +263,7 @@ export default function LicensePage() {
       const setup = await getSetupStatus()
       setStatus({ status: 'active', features: [] })
       setConfigured(setup.configured)
-      const target = setup.state === 'SETUP_REQUIRED' ? '/setup' : '/login'
+      const target = '/login'
       if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
       else setRedirect(target)
       return
@@ -275,7 +275,7 @@ export default function LicensePage() {
     setStatus(nextStatus)
     setConfigured(setup.configured)
     if (nextStatus.status === 'active' || nextStatus.status === 'development') {
-      const target = setup.state === 'SETUP_REQUIRED' ? '/setup' : '/login'
+      const target = setup.state === 'LOCAL_BOOTSTRAP_REQUIRED' ? '/activation' : '/login'
       if (deferRedirect) window.setTimeout(() => setRedirect(target), 900)
       else setRedirect(target)
     }
