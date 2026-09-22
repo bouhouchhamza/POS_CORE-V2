@@ -146,6 +146,10 @@ test('normal routing consumes only the authoritative lifecycle state', () => {
     { kind: 'redirect', to: '/login' },
   )
   assert.deepEqual(
+    routeForLifecycle('LOCAL_BOOTSTRAP_REQUIRED', '/setup'),
+    { kind: 'redirect', to: '/activation' },
+  )
+  assert.deepEqual(
     routeForLifecycle('READY', '/login'),
     { kind: 'redirect', to: '/dashboard' },
   )
