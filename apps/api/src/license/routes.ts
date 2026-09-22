@@ -265,6 +265,39 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       )
      }
     }
+
+    /**
+     * Read the complete commercial state from the control plane while the
+     * caller holds its licence/business lock.  Activation eligibility must
+     * never be reconstructed from just a licence row: legacy businesses may
+     * have no provisioning recipe, while newly-created businesses need a
+     * usable runtime/tenant as well as an active licence.
+     */
+    const lifecycleForLicense=async(client:pg.PoolClient,licenseId:string)=>{
+      const row=(await client.query(`
+        select vb.id vendor_business_id,vb.status vendor_business_status,
+          l.id license_id,l.status license_status,l.expires_at license_expires_at,
+          l.max_devices,l.max_desktop_devices,l.max_web_devices,l.max_mobile_devices,
+          t.status tenant_status,recipe.last_error_code provisioning_error_code,
+          (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id
+        from licenses l
+        join vendor_businesses vb on vb.id=l.vendor_business_id
+        left join saas_tenants t on t.vendor_business_id=vb.id
+        left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id
+        where l.id=$1
+        for share of l,vb
+      `,[licenseId])).rows[0]
+      return commercialLifecycle(row,config.SAAS_TENANCY_MODE)
+    }
+    const requireActivationReady=async(client:pg.PoolClient,licenseId:string)=>{
+      const lifecycle=await lifecycleForLicense(client,licenseId)
+      if(lifecycle.state==='READY_FOR_ACTIVATION')return lifecycle
+      const isCommercialBlock=lifecycle.state==='BLOCKED'
+      throw Object.assign(new Error('This business is not available for device activation.'),{
+        statusCode:isCommercialBlock?403:409,
+        code:lifecycle.reason??'BUSINESS_NOT_READY_FOR_ACTIVATION'
+      })
+    }
     app.get(
      '/api/license/status',
      {preHandler:merchant},
@@ -651,21 +684,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             await client.query('begin');
             const license = await lockActivationCode(client, input.license_key, 'desktop');
             validateActivationCode(license, input.installation_id);
-            if (config.SAAS_TENANCY_MODE === 'database_per_tenant') {
-                const tenant = (await client.query(
-                    `select status from saas_tenants
-                      where vendor_business_id=$1
-                      limit 1
-                      for share`,
-                    [license.vendor_business_id]
-                )).rows[0];
-                if (!tenant || tenant.status !== 'active') {
-                    throw Object.assign(
-                        new Error('The licensed business is not provisioned for CorePOS.'),
-                        { statusCode: 409, code: 'TENANT_NOT_PROVISIONED' }
-                    );
-                }
-            }
+            await requireActivationReady(client, license.id);
             const replay = (await client.query('select 1 from license_activations where license_id=$1 and request_nonce=$2 limit 1', [license.id, input.nonce])).rows[0];
             if (replay)
                 throw Object.assign(new Error('This activation request was already used.'), { statusCode: 409, code: 'ACTIVATION_REPLAY' });
@@ -883,7 +902,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
     app.post('/api/vendor/customers', { preHandler: vendor }, async (request, reply) => { const input = z.object({ name: z.string().min(1), email: z.string().email().nullable().optional(), phone: z.string().max(80).nullable().optional(), notes: z.string().max(1000).nullable().optional() }).parse(request.body), row = (await pool.query('insert into license_customers(name,email,phone,notes) values($1,$2,$3,$4) returning *', [input.name, input.email ?? null, input.phone ?? null, input.notes ?? null])).rows[0]; await pool.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','customer.create','customer',$1,$2)", [row.id, `Customer ${row.name} created`]); return reply.code(201).send({ data: row }); });
     app.get('/api/vendor/businesses',{preHandler:vendor},async()=>{
         const rows=(await pool.query(
-            `select vb.id,vb.name,vb.business_type,vb.status,vb.notes,vb.created_at,vb.updated_at,
+            `select vb.id,vb.name,vb.business_type,vb.status,vb.status vendor_business_status,vb.notes,vb.created_at,vb.updated_at,
               c.name customer_name,c.email customer_email,c.phone customer_phone,
               l.id license_id,l.status license_status,l.expires_at license_expires_at,
               l.max_devices,l.max_desktop_devices,l.max_web_devices,l.max_mobile_devices,
@@ -1899,11 +1918,22 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      email:z.string().email(),
      password:z.string().min(8).max(512)
     }),
+    idempotency_key:z.string().uuid(),
     plan_id:z.string().uuid(),
     duration:z.enum(['lifetime','1_month','3_months','6_months','1_year','custom']).default('1_year'),
     custom_expires_at:z.string().datetime().nullable().optional(),
     offline_validity_days:z.number().int().positive().nullable().optional()
    }).parse(request.body)
+
+   // A key is valid for exactly one request body. This prevents a retry token
+   // from silently returning a prior business when a caller accidentally (or
+   // maliciously) reuses it for different commercial details.
+   const requestHash=crypto.createHash('sha256').update(JSON.stringify({
+    customer:input.customer,business:input.business,owner:input.owner,
+    plan_id:input.plan_id,duration:input.duration,
+    custom_expires_at:input.custom_expires_at??null,
+    offline_validity_days:input.offline_validity_days??null
+   })).digest('hex')
 
    const now=new Date()
    let licenseExpiry:Date|null=input.duration==='lifetime'?null:new Date(now)
@@ -1926,6 +1956,37 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
    let plan:Record<string,unknown>
    try{
     await client.query('begin')
+    // Claim the key in the same transaction as customer/business creation.
+    // PostgreSQL makes a concurrent duplicate wait for the winner to commit,
+    // after which it receives the original business instead of making another
+    // tenant or licence.
+    const claimed=(await client.query(
+      `insert into vendor_business_onboarding_requests(idempotency_key,request_hash)
+       values($1,$2) on conflict do nothing returning idempotency_key`,
+      [input.idempotency_key,requestHash]
+    )).rows[0]
+    if(!claimed){
+      const previous=(await client.query(
+        `select r.request_hash,vb.id,vb.name,vb.business_type,vb.customer_id
+         from vendor_business_onboarding_requests r
+         join vendor_businesses vb on vb.id=r.vendor_business_id
+         where r.idempotency_key=$1
+         for share of r,vb`,
+        [input.idempotency_key]
+      )).rows[0]
+      if(!previous)throw Object.assign(new Error('The original business request did not complete. Submit it again with a new request.'),{statusCode:409,code:'ONBOARDING_REQUEST_INCOMPLETE'})
+      if(!previous.request_hash||previous.request_hash!==requestHash)throw Object.assign(new Error('This idempotency key belongs to a different business request.'),{statusCode:409,code:'ONBOARDING_REQUEST_PAYLOAD_MISMATCH'})
+      await client.query('commit')
+      const lifecycle=await readVendorBusinessLifecycle(pool,String(previous.id))
+      return reply.code(200).send({data:{
+        replayed:true,
+        customer:{id:previous.customer_id},
+        business:{id:previous.id,name:previous.name,business_type:previous.business_type},
+        plan:null,
+        license:null,
+        lifecycle
+      }})
+    }
     plan=(await client.query('select * from license_plans where id=$1 and active=true for share',[input.plan_id])).rows[0]
     if(!plan)throw Object.assign(new Error('Active plan not found.'),{statusCode:422,code:'PLAN_NOT_FOUND'})
     const planFeatures=Array.isArray(plan.features)?plan.features:[]
@@ -1939,6 +2000,11 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      "insert into vendor_businesses(customer_id,name,business_type,status,notes) values($1,$2,$3,'active',$4) returning *",
      [customer.id,input.business.name,input.business.business_type,input.business.notes??null]
     )).rows[0]
+    await client.query(
+      `update vendor_business_onboarding_requests
+       set vendor_business_id=$2 where idempotency_key=$1`,
+      [input.idempotency_key,business.id]
+    )
     const recipe={
      business:{
       name:input.business.name,business_type:input.business.business_type,logo:input.business.logo??null,
@@ -2728,9 +2794,14 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
       if(!verifyOfflineDeviceProof(req.device_public_key,offlineProofPayload(req),req.device_proof))
         return reply.code(403).send({message:'Offline request proof is invalid.',code:'DEVICE_PROOF_INVALID'});
       const rows=await pool.query(`select l.id,l.business_type,l.offline_validity_days,l.max_devices,l.max_desktop_devices,c.name customer_name,vb.name vendor_business_name,
+        vb.status vendor_business_status,l.id license_id,l.status license_status,l.expires_at license_expires_at,
+        l.max_web_devices,l.max_mobile_devices,t.status tenant_status,recipe.last_error_code provisioning_error_code,
+        (select b.id from businesses b where b.vendor_business_id=vb.id limit 1) runtime_business_id,
         (select count(*)::int from license_devices d where d.license_id=l.id and d.status='active') active_devices
         from licenses l join vendor_businesses vb on vb.id=l.vendor_business_id
         join license_customers c on c.id=l.customer_id
+        left join saas_tenants t on t.vendor_business_id=vb.id
+        left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id
         where l.status='active' and vb.status='active' and (l.expires_at is null or l.expires_at>now())
         and ($1::text is null or l.business_type=$1)
         and (l.max_desktop_devices is null or l.max_desktop_devices>0)
@@ -2742,7 +2813,9 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             and (l.max_desktop_devices is null or (select count(*) from license_devices d where d.license_id=l.id and d.status='active' and d.channel='desktop')<l.max_desktop_devices)
           )
         ) order by c.name,vb.name`,[req.version===1?req.business_type:null,req.installation_id,fingerprint(req.device_public_key)]);
-      return {data:rows.rows};
+      return {data:rows.rows
+        .filter(row=>commercialLifecycle(row,config.SAAS_TENANCY_MODE).state==='READY_FOR_ACTIVATION')
+        .map(({vendor_business_status:_businessStatus,license_id:_licenseId,license_status:_licenseStatus,license_expires_at:_licenseExpiry,max_web_devices:_web,max_mobile_devices:_mobile,tenant_status:_tenant,provisioning_error_code:_provisioning,runtime_business_id:_runtime,...safe})=>safe)};
     });
     app.post('/api/vendor/offline-activations/issue', { preHandler: vendor }, async (request, reply) => {
         const input = z.object({
@@ -2774,6 +2847,7 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 throw Object.assign(new Error('License is not compatible with the requested business type.'), { statusCode: 422, code: 'LICENSE_BUSINESS_TYPE_MISMATCH' });
             if (license.max_desktop_devices === 0)
                 throw Object.assign(new Error('Desktop activation is not permitted by this license.'), { statusCode: 403, code: 'DESKTOP_CHANNEL_DISABLED' });
+            await requireActivationReady(client, license.id);
             const replay = (await client.query('select 1 from license_activations where license_id=$1 and request_nonce=$2 limit 1', [license.id, req.nonce])).rows[0];
             if (replay)
                 throw Object.assign(new Error('This offline activation request was already used.'), { statusCode: 409, code: 'ACTIVATION_REPLAY' });
@@ -2810,6 +2884,10 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
                 device.id,
                 `Offline certificate ${signed.certificate.certificate_id} issued`
             ]);
+            await client.query("insert into license_audit_logs(actor,action,entity_type,entity_id,description) values('vendor','offline_activation.issue','vendor_business',$1,$2)", [
+                license.vendor_business_id,
+                `Offline licence issued for device ${device.device_name ?? device.installation_id}`
+            ]);
             await client.query('commit');
             return reply.code(201).send({ data: signed });
         }
@@ -2823,17 +2901,27 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             client.release();
         }
     });
+    app.get('/api/vendor/businesses/:id/offline-activations',{preHandler:vendor},async(request)=>{
+      const businessId=z.string().uuid().parse((request.params as any).id)
+      return {data:(await pool.query(`
+        select a.id,a.created_at,a.status,a.certificate_id,d.device_name,d.platform,d.installation_id
+        from license_activations a
+        join licenses l on l.id=a.license_id
+        left join license_devices d on d.id=a.device_id
+        where l.vendor_business_id=$1 and a.kind='offline'
+        order by a.created_at desc limit 100
+      `,[businessId])).rows}
+    });
     app.get('/api/vendor/dashboard', { preHandler: vendor }, async () => {
-        const runtimeReady = config.SAAS_TENANCY_MODE === 'database_per_tenant'
-            ? "t.status='active' and runtime.id is not null"
-            : 'runtime.id is not null';
         const [businesses, licenses, devices, activations] = await Promise.all([
             pool.query(`select
-              count(*)::int count,
-              count(*) filter(where recipe.last_error_code is not null or t.status='error' or vb.status<>'active' or l.status is distinct from 'active' or (l.expires_at is not null and l.expires_at<=now()))::int attention,
-              count(*) filter(where ${runtimeReady} and l.status='active' and (l.expires_at is null or l.expires_at>now()))::int ready
+              vb.status vendor_business_status,
+              l.id license_id,l.status license_status,l.expires_at license_expires_at,
+              l.max_devices,l.max_desktop_devices,l.max_web_devices,l.max_mobile_devices,
+              t.status tenant_status,recipe.last_error_code provisioning_error_code,
+              runtime.id runtime_business_id
              from vendor_businesses vb
-             left join lateral (select id,status,expires_at from licenses where vendor_business_id=vb.id order by issued_at desc,created_at desc limit 1) l on true
+             left join lateral (select id,status,expires_at,max_devices,max_desktop_devices,max_web_devices,max_mobile_devices from licenses where vendor_business_id=vb.id order by issued_at desc,created_at desc limit 1) l on true
              left join lateral (select id from businesses where vendor_business_id=vb.id limit 1) runtime on true
              left join saas_tenants t on t.vendor_business_id=vb.id
              left join vendor_business_provisioning recipe on recipe.vendor_business_id=vb.id`),
@@ -2841,8 +2929,13 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
             pool.query("select count(*)::int total,count(*) filter (where status='active')::int active,count(*) filter (where status='revoked')::int revoked from license_devices"),
             pool.query("select count(*)::int total,count(*) filter (where created_at>=now()-interval '30 days')::int last_30_days from license_activations")
         ]);
+        const lifecycleRows=businesses.rows.map(row=>commercialLifecycle(row,config.SAAS_TENANCY_MODE));
         return { data: {
-                businesses: businesses.rows[0],
+                businesses: {
+                  count: lifecycleRows.length,
+                  ready: lifecycleRows.filter(item=>item.state==='READY_FOR_ACTIVATION').length,
+                  attention: lifecycleRows.filter(item=>item.state==='PROVISIONING_FAILED'||item.state==='BLOCKED').length,
+                },
                 licenses: licenses.rows[0],
                 devices: devices.rows[0],
                 activations: activations.rows[0]

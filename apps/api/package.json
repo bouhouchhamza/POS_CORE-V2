@@ -10,7 +10,7 @@
     "start:local": "node dist/src/local/server.js",
     "dev:local": "tsx watch src/local/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/**/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=1 dist/**/*.test.js",
     "test:postgres": "npm run build && node -e \"const url=process.env.TEST_DATABASE_URL;if(!url||!new URL(url).pathname.endsWith('_test'))throw new Error('test:postgres requires TEST_DATABASE_URL ending in _test.');\" && node --test dist/src/server.integration.test.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

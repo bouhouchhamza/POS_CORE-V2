@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { businessTypes, featureKeys, type FeatureKey } from '@corepos/shared-types'
 import { vendorApi } from '../api/license'
 
@@ -87,6 +87,9 @@ type Audit = { id: string; created_at?: string; actor?: string; action?: string;
 type ActivationCode = { id: string; vendor_business_name?: string; customer_name?: string; activation_status?: string; key_hint?: string; expires_at?: string; consumed_at?: string | null }
 type Dashboard = { businesses: { count: number; attention: number; ready: number }; licenses: { active: number }; devices: { active: number } }
 type CodeResult = { activation_code: string; expires_at?: string | null; vendor_business_name?: string; customer_name?: string }
+type OfflineCandidate = { id: string; vendor_business_name?: string | null; customer_name?: string | null; business_type?: string; active_devices?: number; max_devices?: number; offline_validity_days?: number | null }
+type OfflineLicense = { certificate: { certificate_id: string; installation_id: string; expires_at?: string | null; offline_validity_days?: number | null }; signature: string }
+type OfflineActivation = { id: string; created_at?: string; status?: string; certificate_id?: string; device_name?: string | null; platform?: string | null; installation_id?: string | null }
 
 type Onboarding = {
   customer_name: string; customer_email: string; customer_phone: string; customer_notes: string
@@ -128,7 +131,7 @@ const copy = {
     businessCreated: 'Entreprise créée. CorePOS termine sa préparation interne.', businessReady: 'Entreprise prête. Générez le code d’activation à remettre au client.',
     codeTitle: 'Code d’activation appareil', codeShownOnce: 'Ce code n’est affiché qu’une fois. Conservez-le ou transmettez-le au client de façon sécurisée.',
     active: 'Active', disabled: 'Désactivée', suspended: 'Suspendue', closed: 'Fermée', revoked: 'Révoquée', expired: 'Expirée', available: 'Disponible', consumed: 'Utilisé', suspend: 'Désactiver', reactivate: 'Réactiver', revoke: 'Révoquer', editBusiness: 'Modifier l’entreprise', saveChanges: 'Enregistrer', notes: 'Notes', devicesTitle: 'Appareils activés', codeUnavailable: 'Le code précédent n’est plus disponible. Générez-en un nouveau si nécessaire.',
-    plans: 'Plans', codes: 'Codes', activations: 'Activations', audit: 'Audit', search: 'Rechercher une entreprise', noMatches: 'Aucune entreprise correspondante.', newPlan: 'Nouveau plan', editPlan: 'Modifier le plan', modules: 'Modules inclus', deviceLimit: 'Limite d’appareils', offlineDays: 'Jours hors ligne (facultatif)', planCode: 'Code du plan',
+    plans: 'Plans', codes: 'Codes', activations: 'Activations', audit: 'Audit', search: 'Rechercher une entreprise', noMatches: 'Aucune entreprise correspondante.', newPlan: 'Nouveau plan', editPlan: 'Modifier le plan', modules: 'Modules inclus', deviceLimit: 'Limite d’appareils', offlineDays: 'Jours hors ligne (facultatif)', planCode: 'Code du plan', offlineActivation: 'Activation hors ligne', importRequest: 'Importer une demande .posreq', requestPreview: 'Aperçu sécurisé de la demande', issueOffline: 'Émettre la licence hors ligne', downloadOffline: 'Télécharger .poslic', noOfflineHistory: 'Aucune licence hors ligne émise.', requestNotEligible: 'Cette demande ne peut pas être utilisée pour cette entreprise.',
   },
   en: {
     dashboard: 'Dashboard', businesses: 'Businesses', licenses: 'Licences', devices: 'Devices', administration: 'Administration',
@@ -143,7 +146,7 @@ const copy = {
     businessCreated: 'Business created. CorePOS is completing its internal preparation.', businessReady: 'Business ready. Generate the activation code for the customer.',
     codeTitle: 'Device activation code', codeShownOnce: 'This code is displayed once. Store it or send it securely to the customer.',
     active: 'Active', disabled: 'Disabled', suspended: 'Suspended', closed: 'Closed', revoked: 'Revoked', expired: 'Expired', available: 'Available', consumed: 'Used', suspend: 'Disable', reactivate: 'Reactivate', revoke: 'Revoke', editBusiness: 'Edit business', saveChanges: 'Save changes', notes: 'Notes', devicesTitle: 'Activated devices', codeUnavailable: 'The previous code is no longer available. Generate a new one if needed.',
-    plans: 'Plans', codes: 'Codes', activations: 'Activations', audit: 'Audit', search: 'Search businesses', noMatches: 'No matching businesses.', newPlan: 'New plan', editPlan: 'Edit plan', modules: 'Included modules', deviceLimit: 'Device limit', offlineDays: 'Offline days (optional)', planCode: 'Plan code',
+    plans: 'Plans', codes: 'Codes', activations: 'Activations', audit: 'Audit', search: 'Search businesses', noMatches: 'No matching businesses.', newPlan: 'New plan', editPlan: 'Edit plan', modules: 'Included modules', deviceLimit: 'Device limit', offlineDays: 'Offline days (optional)', planCode: 'Plan code', offlineActivation: 'Offline activation', importRequest: 'Import .posreq request', requestPreview: 'Safe request preview', issueOffline: 'Issue offline licence', downloadOffline: 'Download .poslic', noOfflineHistory: 'No offline licences have been issued.', requestNotEligible: 'This request is not eligible for this business.',
   },
   ar: {
     dashboard: 'لوحة التحكم', businesses: 'الأنشطة', licenses: 'التراخيص', devices: 'الأجهزة', administration: 'الإدارة',
@@ -158,7 +161,7 @@ const copy = {
     businessCreated: 'تم إنشاء النشاط. يستكمل CorePOS الإعداد الداخلي.', businessReady: 'النشاط جاهز. أنشئ رمز التفعيل للعميل.',
     codeTitle: 'رمز تفعيل الجهاز', codeShownOnce: 'يظهر هذا الرمز مرة واحدة. احفظه أو أرسله بأمان إلى العميل.',
     active: 'نشط', disabled: 'معطّل', suspended: 'معلّق', closed: 'مغلق', revoked: 'ملغى', expired: 'منتهي', available: 'متاح', consumed: 'مستخدم', suspend: 'تعطيل', reactivate: 'إعادة تفعيل', revoke: 'إلغاء', editBusiness: 'تعديل النشاط', saveChanges: 'حفظ التغييرات', notes: 'ملاحظات', devicesTitle: 'الأجهزة المفعّلة', codeUnavailable: 'لم يعد الرمز السابق متاحًا. أنشئ رمزًا جديدًا عند الحاجة.',
-    plans: 'الخطط', codes: 'الرموز', activations: 'عمليات التفعيل', audit: 'التدقيق', search: 'البحث عن نشاط', noMatches: 'لا توجد أنشطة مطابقة.', newPlan: 'خطة جديدة', editPlan: 'تعديل الخطة', modules: 'الوحدات المشمولة', deviceLimit: 'حد الأجهزة', offlineDays: 'أيام دون اتصال (اختياري)', planCode: 'رمز الخطة',
+    plans: 'الخطط', codes: 'الرموز', activations: 'عمليات التفعيل', audit: 'التدقيق', search: 'البحث عن نشاط', noMatches: 'لا توجد أنشطة مطابقة.', newPlan: 'خطة جديدة', editPlan: 'تعديل الخطة', modules: 'الوحدات المشمولة', deviceLimit: 'حد الأجهزة', offlineDays: 'أيام دون اتصال (اختياري)', planCode: 'رمز الخطة', offlineActivation: 'التفعيل دون اتصال', importRequest: 'استيراد طلب .posreq', requestPreview: 'معاينة آمنة للطلب', issueOffline: 'إصدار ترخيص دون اتصال', downloadOffline: 'تنزيل .poslic', noOfflineHistory: 'لم يتم إصدار تراخيص دون اتصال.', requestNotEligible: 'هذا الطلب غير مؤهل لهذا النشاط.',
   },
 } as const
 
@@ -198,9 +201,16 @@ export default function VendorAdminPage() {
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
   const [planForm, setPlanForm] = useState<PlanForm>(emptyPlanForm)
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null)
-  const [detailTab, setDetailTab] = useState<'overview' | 'license' | 'devices' | 'activity'>('overview')
+  const [detailTab, setDetailTab] = useState<'overview' | 'license' | 'devices' | 'offline' | 'activity'>('overview')
   const [activation, setActivation] = useState<{ code: string; license: License } | null>(null)
   const [search, setSearch] = useState('')
+  const [offlineRequest, setOfflineRequest] = useState<Record<string, unknown> | null>(null)
+  const [offlineCandidate, setOfflineCandidate] = useState<OfflineCandidate | null>(null)
+  const [offlineLicense, setOfflineLicense] = useState<OfflineLicense | null>(null)
+  const [offlineHistory, setOfflineHistory] = useState<OfflineActivation[]>([])
+  // Reuse this key while a form is open so a retry after a network timeout
+  // resolves to the original business instead of creating another tenant.
+  const onboardingRequestId = useRef<string | null>(null)
   const t = copy[language]
 
   const selectedBusiness = businesses.find((item) => item.id === selectedBusinessId) ?? null
@@ -235,10 +245,27 @@ export default function VendorAdminPage() {
     if (action === 'business.create') return t.businessCreated
     if (action === 'tenant.provision.complete') return t.businessReady
     if (action === 'tenant.provision.failed') return t.failed
+    if (action === 'tenant.provision.retry') return t.retry
     if (action === 'activation_code.issue' || action === 'activation_code.regenerate') return t.codeTitle
+    if (action === 'activation_code.consume') return language === 'fr' ? 'Code d’activation utilisé' : language === 'ar' ? 'تم استخدام رمز التفعيل' : 'Activation code consumed'
+    if (action === 'activation_code.revoke') return language === 'fr' ? 'Code d’activation révoqué' : language === 'ar' ? 'تم إلغاء رمز التفعيل' : 'Activation code revoked'
+    if (action === 'license.create') return language === 'fr' ? 'Licence créée' : language === 'ar' ? 'تم إنشاء الترخيص' : 'Licence created'
+    if (action === 'license.suspended') return language === 'fr' ? 'Licence suspendue' : language === 'ar' ? 'تم تعليق الترخيص' : 'Licence suspended'
+    if (action === 'license.active') return language === 'fr' ? 'Licence réactivée' : language === 'ar' ? 'تمت إعادة تفعيل الترخيص' : 'Licence reactivated'
+    if (action === 'license.revoked') return language === 'fr' ? 'Licence révoquée' : language === 'ar' ? 'تم إلغاء الترخيص' : 'Licence revoked'
+    if (action === 'license.renew') return language === 'fr' ? 'Licence renouvelée' : language === 'ar' ? 'تم تجديد الترخيص' : 'Licence renewed'
+    if (action === 'device.revoke') return language === 'fr' ? 'Appareil révoqué' : language === 'ar' ? 'تم إلغاء الجهاز' : 'Device revoked'
+    if (action === 'offline_activation.issue') return language === 'fr' ? 'Licence hors ligne émise' : language === 'ar' ? 'تم إصدار ترخيص دون اتصال' : 'Offline licence issued'
     if (action?.startsWith('license.')) return t.licence
     if (action?.startsWith('device.')) return t.devices
-    return t.activity
+    return action ? action.replaceAll(/[._]/g, ' ') : t.activity
+  }
+
+  function readinessMessage(business: Business) {
+    if (business.lifecycle_state === 'READY_FOR_ACTIVATION') return ''
+    if (business.lifecycle_state === 'PROVISIONING_FAILED') return language === 'fr' ? 'La préparation interne a échoué. Réessayez depuis cette entreprise.' : language === 'ar' ? 'فشل الإعداد الداخلي. أعد المحاولة من هذا النشاط.' : 'Internal preparation failed. Retry from this business.'
+    if (business.lifecycle_state === 'PROVISIONING') return language === 'fr' ? 'CorePOS termine la préparation interne avant l’activation.' : language === 'ar' ? 'يستكمل CorePOS الإعداد الداخلي قبل التفعيل.' : 'CorePOS is completing internal preparation before activation.'
+    return language === 'fr' ? 'L’activation est indisponible tant que le statut commercial ou la licence est bloqué.' : language === 'ar' ? 'التفعيل غير متاح ما دامت الحالة التجارية أو الترخيص محظورًا.' : 'Activation is unavailable while the commercial status or licence is blocked.'
   }
 
   async function loadBusinesses() { setBusinesses(await vendorApi.get<Business[]>('/businesses')) }
@@ -297,7 +324,7 @@ export default function VendorAdminPage() {
 
   async function openCreate() {
     setLoading(true); clearMessages()
-    try { await loadPlans(); setOnboarding(emptyOnboarding); setShowCreate(true) }
+    try { await loadPlans(); setOnboarding(emptyOnboarding); onboardingRequestId.current = crypto.randomUUID(); setShowCreate(true) }
     catch { fail() } finally { setLoading(false) }
   }
 
@@ -349,6 +376,7 @@ export default function VendorAdminPage() {
     setLoading(true); clearMessages()
     try {
       const result = await vendorApi.post<{ business: { id: string }; lifecycle: { state: LifecycleState } }>('/onboarding', {
+        idempotency_key: onboardingRequestId.current ?? (onboardingRequestId.current = crypto.randomUUID()),
         customer: { name: onboarding.customer_name, email: onboarding.customer_email || null, phone: onboarding.customer_phone || null, notes: onboarding.customer_notes || null },
         business: { name: onboarding.business_name, business_type: onboarding.business_type, address: onboarding.address || null, phone: onboarding.customer_phone || null, currency: onboarding.currency, locale: onboarding.locale, timezone: onboarding.timezone },
         owner: { name: onboarding.owner_name, email: onboarding.owner_email, password: onboarding.owner_password },
@@ -357,7 +385,7 @@ export default function VendorAdminPage() {
         custom_expires_at: onboarding.duration === 'custom' ? new Date(onboarding.custom_expires_at).toISOString() : null,
         offline_validity_days: onboarding.offline_validity_days,
       })
-      setShowCreate(false); setOnboarding(emptyOnboarding); setSelectedBusinessId(result.business.id); setDetailTab('overview')
+      setShowCreate(false); setOnboarding(emptyOnboarding); onboardingRequestId.current = null; setSelectedBusinessId(result.business.id); setDetailTab('overview')
       await Promise.all([loadBusinesses(), loadLicenses(), loadDevices()]); setSection('businesses')
       setSuccess(result.lifecycle.state === 'READY_FOR_ACTIVATION' ? t.businessReady : t.businessCreated)
     } catch { fail() } finally { setLoading(false) }
@@ -422,6 +450,44 @@ export default function VendorAdminPage() {
     void vendorApi.get<Audit[]>('/audit').then(setRecords).catch(() => undefined)
   }
 
+  async function loadOfflineHistory(businessId: string) {
+    setOfflineHistory(await vendorApi.get<OfflineActivation[]>(`/businesses/${businessId}/offline-activations`))
+  }
+
+  async function importOfflineRequest(file: File) {
+    if (!selectedBusiness || !selectedLicense || loading) return
+    setLoading(true); clearMessages(); setOfflineRequest(null); setOfflineCandidate(null); setOfflineLicense(null)
+    try {
+      if (!file.name.toLowerCase().endsWith('.posreq') || file.size > 256 * 1024) throw new Error('INVALID_OFFLINE_REQUEST_FILE')
+      const request = JSON.parse(await file.text()) as Record<string, unknown>
+      if (!request || Array.isArray(request)) throw new Error('INVALID_OFFLINE_REQUEST_FILE')
+      const candidates = await vendorApi.post<OfflineCandidate[]>('/offline-activations/candidates', request)
+      const candidate = candidates.find((item) => item.id === selectedLicense.id)
+      if (!candidate) { setError(t.requestNotEligible); return }
+      setOfflineRequest(request); setOfflineCandidate(candidate)
+      await loadOfflineHistory(selectedBusiness.id)
+    } catch { fail() } finally { setLoading(false) }
+  }
+
+  function downloadOfflineLicense(license: OfflineLicense) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(license, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url; link.download = `corepos-${license.certificate.certificate_id}.poslic`; link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function issueOfflineLicense() {
+    if (!selectedBusiness || !selectedLicense || !offlineRequest || !offlineCandidate || loading) return
+    if (!window.confirm(t.issueOffline + ' ?')) return
+    setLoading(true); clearMessages()
+    try {
+      const signed = await vendorApi.post<OfflineLicense>('/offline-activations/issue', { license_id: selectedLicense.id, request: offlineRequest })
+      setOfflineLicense(signed)
+      await Promise.all([loadOfflineHistory(selectedBusiness.id), loadDevices(), loadLicenses(), loadBusinesses()])
+      setSuccess(t.issueOffline)
+    } catch { fail() } finally { setLoading(false) }
+  }
+
   function businessActions(business: Business, compact = false) {
     const license = business.license_id ? licenses.find((item) => item.id === business.license_id) : null
     return <div className="vendor-row-actions">
@@ -434,7 +500,7 @@ export default function VendorAdminPage() {
   function businessList() {
     if (loading && !businesses.length) return <div className="vendor-empty">…</div>
     if (!filteredBusinesses.length) return <div className="vendor-empty">{search ? t.noMatches : t.noBusinesses}<br/><button className="button" onClick={() => void openCreate()}>{t.createBusiness}</button></div>
-    return <div className="table-wrap"><table><thead><tr><th>{t.business}</th><th>{t.licence}</th><th>{t.status}</th><th>{t.deviceUsage}</th><th /></tr></thead><tbody>{filteredBusinesses.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><br/><small>{item.customer_name ?? '—'}{item.customer_email ? ` · ${item.customer_email}` : ''}</small></td><td>{item.plan_name ?? '—'}<br/><small>{item.license_status ?? '—'}</small></td><td>{statusBadge(item.lifecycle_state, lifecycleLabel(item.lifecycle_state))}</td><td><strong>{item.active_devices ?? 0} / {item.max_devices ?? '—'}</strong></td><td>{businessActions(item)}</td></tr>)}</tbody></table></div>
+    return <div className="table-wrap"><table><thead><tr><th>{t.business}</th><th>{t.licence}</th><th>{t.status}</th><th>{t.deviceUsage}</th><th /></tr></thead><tbody>{filteredBusinesses.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><br/><small>{item.customer_name ?? '—'}{item.customer_email ? ` · ${item.customer_email}` : ''}</small></td><td>{item.plan_name ?? '—'}<br/><small>{item.license_status ?? '—'}</small></td><td>{statusBadge(item.lifecycle_state, lifecycleLabel(item.lifecycle_state))}{readinessMessage(item) ? <><br/><small>{readinessMessage(item)}</small></> : null}</td><td><strong>{item.active_devices ?? 0} / {item.max_devices ?? '—'}</strong></td><td>{businessActions(item)}</td></tr>)}</tbody></table></div>
   }
 
   function licenseList() {
@@ -453,11 +519,12 @@ export default function VendorAdminPage() {
     return <>
       <div className="vendor-section-head"><div><small>{selectedBusiness.customer_name ?? 'CorePOS'}</small><h2>{selectedBusiness.name}</h2></div><div className="vendor-row-actions">{statusBadge(selectedBusiness.lifecycle_state, lifecycleLabel(selectedBusiness.lifecycle_state))}{businessActions(selectedBusiness, true)}<button className="button secondary" disabled={loading} onClick={() => openEditBusiness(selectedBusiness)}>{t.editBusiness}</button><button className="button secondary" onClick={() => setSelectedBusinessId(null)}>{t.businesses}</button></div></div>
       <div className="vendor-row-actions" style={{ marginBottom: 12 }}>
-        {(['overview', 'license', 'devices', 'activity'] as const).map((tab) => <button key={tab} className={`button ${detailTab === tab ? '' : 'secondary'}`} onClick={() => setDetailTab(tab)}>{tab === 'overview' ? t.overview : tab === 'license' ? t.licence : tab === 'devices' ? t.devices : t.activity}</button>)}
+        {(['overview', 'license', 'devices', 'offline', 'activity'] as const).map((tab) => <button key={tab} className={`button ${detailTab === tab ? '' : 'secondary'}`} onClick={() => { setDetailTab(tab); if (tab === 'offline') void loadOfflineHistory(selectedBusiness.id).catch(() => fail()) }}>{tab === 'overview' ? t.overview : tab === 'license' ? t.licence : tab === 'devices' ? t.devices : tab === 'offline' ? t.offlineActivation : t.activity}</button>)}
       </div>
       {detailTab === 'overview' ? <article className="settings-card"><div className="vendor-summary-grid"><div className="vendor-summary-line"><small>{t.contact}</small><strong>{selectedBusiness.customer_name ?? '—'}</strong><span>{selectedBusiness.customer_email ?? selectedBusiness.customer_phone ?? '—'}</span></div><div className="vendor-summary-line"><small>{t.licence}</small><strong>{selectedBusiness.plan_name ?? '—'}</strong><span>{statusLabel(selectedBusiness.license_status)}</span></div><div className="vendor-summary-line"><small>{t.deviceUsage}</small><strong>{selectedBusiness.active_devices ?? 0} / {selectedBusiness.max_devices ?? '—'}</strong></div><div className="vendor-summary-line"><small>{t.created}</small><strong>{date(selectedBusiness.created_at, language)}</strong></div></div></article> : null}
       {detailTab === 'license' ? <article className="settings-card"><h3>{t.licence}</h3>{selectedLicense ? <><div className="vendor-summary-grid"><div className="vendor-summary-line"><small>{t.status}</small><strong>{statusLabel(selectedLicense.status)}</strong></div><div className="vendor-summary-line"><small>{t.plan}</small><strong>{selectedLicense.plan_name ?? selectedLicense.plan_code ?? '—'}</strong></div><div className="vendor-summary-line"><small>{t.expires}</small><strong>{selectedLicense.expires_at ? date(selectedLicense.expires_at, language) : '∞'}</strong></div><div className="vendor-summary-line"><small>{t.deviceUsage}</small><strong>{selectedLicense.active_devices ?? 0} / {selectedLicense.max_devices}</strong></div></div><p className="vendor-secret-note">{t.codeUnavailable}</p><div className="vendor-row-actions">{selectedLicense.lifecycle_state === 'READY_FOR_ACTIVATION' ? <button className="button" disabled={loading} onClick={() => void generateCode(selectedLicense)}>{t.generate}</button> : null}</div></> : <p>{t.provisioning}</p>}</article> : null}
       {detailTab === 'devices' ? <article className="settings-card vendor-table-card"><h3>{t.devicesTitle}</h3>{deviceList(selectedDevices)}</article> : null}
+      {detailTab === 'offline' ? <article className="settings-card vendor-offline"><h3>{t.offlineActivation}</h3>{selectedLicense?.lifecycle_state === 'READY_FOR_ACTIVATION' ? <><label>{t.importRequest}<input accept=".posreq,application/json" disabled={loading} type="file" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void importOfflineRequest(file) }}/></label>{offlineRequest && offlineCandidate ? <><section className="vendor-summary-grid"><div className="vendor-summary-line"><small>{t.requestPreview}</small><strong dir="ltr">{String(offlineRequest.device_name ?? 'CorePOS device')}</strong><span dir="ltr">{String(offlineRequest.platform ?? 'desktop')} · {String(offlineRequest.app_version ?? '—')}</span></div><div className="vendor-summary-line"><small>{t.deviceUsage}</small><strong>{offlineCandidate.active_devices ?? 0} / {offlineCandidate.max_devices ?? '—'}</strong><span>{offlineCandidate.offline_validity_days ? `${offlineCandidate.offline_validity_days} ${t.offlineDays}` : '∞'}</span></div></section><button className="button" disabled={loading} onClick={() => void issueOfflineLicense()}>{t.issueOffline}</button></> : null}{offlineLicense ? <div className="vendor-activation-code-block"><p>{t.issueOffline}</p><code dir="ltr">{offlineLicense.certificate.certificate_id}</code><button className="button" onClick={() => downloadOfflineLicense(offlineLicense)}>{t.downloadOffline}</button></div> : null}</> : <p>{t.blocked}</p>}<h4>{t.activity}</h4>{offlineHistory.length ? <div className="table-wrap"><table><thead><tr><th>{t.deviceUsage}</th><th>{t.status}</th><th>{t.created}</th></tr></thead><tbody>{offlineHistory.map((item) => <tr key={item.id}><td><strong>{item.device_name ?? 'CorePOS'}</strong><br/><small dir="ltr">{item.installation_id ?? '—'}</small></td><td>{statusBadge(item.status ?? 'approved', statusLabel(item.status ?? 'approved'))}</td><td>{date(item.created_at, language)}</td></tr>)}</tbody></table></div> : <div className="vendor-empty">{t.noOfflineHistory}</div>}</article> : null}
       {detailTab === 'activity' ? <article className="settings-card vendor-table-card">{activityList(records.filter((item) => 'entity_id' in item && item.entity_id === selectedBusiness.id) as Audit[])}</article> : null}
     </>
   }
