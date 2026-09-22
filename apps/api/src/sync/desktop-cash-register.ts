@@ -59,8 +59,9 @@ export async function registerDesktopCashRegisterSync(app:FastifyInstance,{pool,
     try{await client.query('begin');const existing=(await client.query('select payload,sync_status from sync_mutations where business_id=$1 and client_id=$2 for update',[context.businessId,body.mutation.client_id])).rows[0];if(existing){await client.query('commit');const outcome=existing.payload;return reply.code(outcome?.outcome==='conflict'?409:200).send({data:outcome,replayed:true});}
       const profile=(await client.query("select id,role,branch_id from users where business_id=$1 and lower(email)=lower($2) and is_active=true limit 1",[context.businessId,body.mutation.user_email])).rows[0];
       if(!profile||!['patron','owner','admin','manager','worker','cashier'].includes(profile.role))throw Object.assign(new Error('The selected local profile is not allowed to manage cash.'),{statusCode:403,code:'SYNC_PROFILE_NOT_ALLOWED'});
-      const branch=body.mutation.branch_code?(await client.query('select id from branches where business_id=$1 and code=$2 and active=true limit 1',[context.businessId,body.mutation.branch_code])).rows[0]:null;
+      const branch=body.mutation.branch_code?(await client.query('select id from branches where business_id=$1 and code=$2 and active=true limit 1',[context.businessId,body.mutation.branch_code])).rows[0]:(profile.branch_id===null?null:{id:profile.branch_id});
       if(body.mutation.branch_code&&!branch)throw Object.assign(new Error('Branch does not belong to this Business.'),{statusCode:409,code:'SYNC_BRANCH_NOT_FOUND'});
+      if((profile.branch_id??null)!==(branch?.id??null))throw Object.assign(new Error('Cash register branch does not match the signed-in profile.'),{statusCode:403,code:'SYNC_BRANCH_MISMATCH'});
       let session:any;
       if(body.mutation.operation==='open'){
         const open=(await client.query("select * from cash_register_sessions where business_id=$1 and branch_id is not distinct from $2 and status='open' limit 1 for update",[context.businessId,branch?.id??null])).rows[0];

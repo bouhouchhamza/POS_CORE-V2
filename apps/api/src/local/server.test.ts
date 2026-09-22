@@ -146,6 +146,28 @@ test('cash register remains locally operational while hosted sync is unavailable
   } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
 });
 
+test('cash sync apply is monotonic and never feeds remotely applied state into the local outbox', async () => {
+  const context=await fixture();
+  try {
+    const openedAt='2026-09-22T10:00:00.000Z',closedAt='2026-09-22T10:01:00.000Z';
+    const stamp=new Date().toISOString(),vendorBusinessId=crypto.randomUUID();
+    const result=context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Sync','sync-monotonic','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(vendorBusinessId,stamp,stamp);
+    const businessId=Number(result.lastInsertRowid),branchId=Number(context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,stamp,stamp).lastInsertRowid);
+    context.db.prepare('update users set business_id=?,branch_id=? where id=1').run(businessId,branchId);
+    const remoteOpen={id:44,branch_code:'MAIN',business_date:'2026-09-22',status:'open',opened_at:openedAt,opening_cash:10,opening_note:null,closed_at:null,actual_cash:null,closing_note:null,updated_at:openedAt};
+    const first=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${openedAt}|44`,sessions:[remoteOpen]}});
+    assert.equal(first.statusCode,200,first.body);
+    const remoteClosed={...remoteOpen,status:'closed',closed_at:closedAt,actual_cash:10,updated_at:closedAt};
+    const second=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${closedAt}|44`,sessions:[remoteClosed]}});
+    assert.equal(second.statusCode,200,second.body);
+    const stale=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${openedAt}|44`,sessions:[remoteOpen]}});
+    assert.equal(stale.statusCode,200,stale.body);
+    assert.equal(context.db.prepare('select status from cash_register_sessions where server_id=44').get()?.status,'closed');
+    assert.equal(context.db.prepare("select value from sync_state where key='cash_register_cursor'").get()?.value,`${closedAt}|44`);
+    assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status in ('pending','failed')").get()?.n),0);
+  } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
 test("legacy commercial state is fail-closed until Vendor activation", async () => {
   const context = await fixture();
 

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
 } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -98,14 +99,18 @@ export default function CaissePage() {
   const [error, setError] =
     useState<string | null>(null)
   const [renderedAt] = useState(() => Date.now())
+  const registerRequest = useRef(0)
 
   const loadRegister = useCallback(async () => {
+    const requestId = ++registerRequest.current
+
     try {
       setError(null)
 
       const currentSession =
         await getCurrentCashRegister()
 
+      if (requestId !== registerRequest.current) return
       setCurrent(currentSession)
 
       if (canManageRegister) {
@@ -115,21 +120,31 @@ export default function CaissePage() {
             getWorkers(),
           ])
 
+        if (requestId !== registerRequest.current) return
         setHistory(sessions)
         setWorkers(workerData)
       } else {
+        if (requestId !== registerRequest.current) return
         setHistory([])
         setWorkers([])
       }
     } catch (err) {
-      setError(getApiErrorMessage(err))
+      if (requestId === registerRequest.current) {
+        setError(getApiErrorMessage(err))
+      }
     } finally {
-      setLoading(false)
+      if (requestId === registerRequest.current) setLoading(false)
     }
   }, [canManageRegister])
 
   useEffect(() => {
     void loadRegister()
+  }, [loadRegister])
+
+  useEffect(() => {
+    const refresh = () => void loadRegister()
+    window.addEventListener('cash-register-changed', refresh)
+    return () => window.removeEventListener('cash-register-changed', refresh)
   }, [loadRegister])
 
   const loadReport = useCallback(

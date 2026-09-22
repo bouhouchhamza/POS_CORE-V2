@@ -960,7 +960,8 @@ async function cashSessionDto(id:number,businessId:number) {
 }
 
 app.get("/api/cash-register/current",{preHandler:authenticate},async(req)=>{const u=await currentUser(req);
-  const [session]=await db.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),eq(cashRegisterSessions.status,"open"))).limit(1);
+  const branchCondition=u!.branchId===null?isNull(cashRegisterSessions.branchId):eq(cashRegisterSessions.branchId,u!.branchId);
+  const [session]=await db.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),branchCondition,eq(cashRegisterSessions.status,"open"))).limit(1);
   return {data:session?await cashSessionDto(session.id,u!.businessId):null};
 });
 app.post("/api/cash-register/open",{preHandler:cashManager},async(req,reply)=>{
@@ -985,7 +986,8 @@ app.post("/api/cash-register/close",{preHandler:cashManager},async(req,reply)=>{
   try{
     const input=cashRegisterCloseSchema.parse(req.body);
     const u=await currentUser(req);const id=await db.transaction(async(tx)=>{
-      const [session]=await tx.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),eq(cashRegisterSessions.status,"open"))).for("update").limit(1);
+      const branchCondition=u!.branchId===null?isNull(cashRegisterSessions.branchId):eq(cashRegisterSessions.branchId,u!.branchId);
+      const [session]=await tx.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),branchCondition,eq(cashRegisterSessions.status,"open"))).for("update").limit(1);
       if(!session)return null;
       const [totals]=await tx.select({cash:sql<string>`coalesce(sum(case when lower(${sales.paymentMethod}) in ('cash','espèces','especes') then ${sales.total} else 0 end),0)`})
         .from(sales).where(eq(sales.cashRegisterSessionId,session.id));
