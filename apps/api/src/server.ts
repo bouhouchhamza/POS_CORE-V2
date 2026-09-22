@@ -67,6 +67,7 @@ import { registerTenantRouting } from './saas/tenant-routing.js';
 import { readCommercialLicenseState, resolveRuntimeBusinessIdentity } from './license/control-plane.js';
 import { ensureWebSessionDevice, mobileLoginProofPayload, registerSessionDevice, touchSessionDevice, verifySessionDeviceProof, type SessionDevice } from './license/session-devices.js';
 import { activationRequestIsFresh } from './license/policy.js';
+import { registerDesktopCashRegisterSync } from './sync/desktop-cash-register.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -121,6 +122,7 @@ await app.register(fastifyStatic, {
 });
 
 await registerTenantRouting(app, controlPool);
+await registerDesktopCashRegisterSync(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,

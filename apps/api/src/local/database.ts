@@ -35,6 +35,16 @@ export function verifiedDatabaseSnapshot(db:DatabaseSync,paths:LocalPaths,label=
   return directory;
 }
 function existingUserTables(db:DatabaseSync){return Number(db.prepare("select count(*) count from sqlite_master where type='table' and name not like 'sqlite_%'").get()?.count??0)}
+function applyCashRegisterSyncIdentity(db:DatabaseSync){
+  // SQLite has no portable ADD COLUMN IF NOT EXISTS. Checking the actual
+  // schema also recovers safely from an interrupted historical upgrade where
+  // a column was committed before user_version could advance.
+  const columns=new Set((db.prepare("pragma table_info(cash_register_sessions)").all() as {name:string}[]).map(row=>row.name));
+  if(!columns.has('client_id'))db.exec('ALTER TABLE cash_register_sessions ADD COLUMN client_id TEXT');
+  if(!columns.has('server_id'))db.exec('ALTER TABLE cash_register_sessions ADD COLUMN server_id INTEGER');
+  if(!columns.has('sync_status'))db.exec("ALTER TABLE cash_register_sessions ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'local' CHECK(sync_status IN ('local','pending','synced','conflict'))");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cash_register_client_id_unique ON cash_register_sessions(business_id,client_id) WHERE client_id IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS cash_register_server_id_unique ON cash_register_sessions(business_id,server_id) WHERE server_id IS NOT NULL; DROP INDEX IF EXISTS cash_register_one_open_idx; CREATE UNIQUE INDEX cash_register_one_open_idx ON cash_register_sessions(business_id,branch_id) WHERE status='open' AND sync_status!='conflict'; CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)");
+}
 export function openLocalDatabase(paths:LocalPaths){
   ensureLocalPaths(paths);const existed=fs.existsSync(paths.database);const db=new DatabaseSync(paths.database);
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
@@ -49,7 +59,7 @@ export function openLocalDatabase(paths:LocalPaths){
       try{
         db.exec("BEGIN IMMEDIATE");
         try{
-          db.exec(migration.sql);
+          if(migration.name==='cash_register_sync_identity')applyCashRegisterSyncIdentity(db);else db.exec(migration.sql);
           if(requiresForeignKeysOff){
             const violations=db.prepare("PRAGMA foreign_key_check").all();
             if(violations.length)throw new Error("La migration des r?les utilisateurs a cr?? des r?f?rences SQLite invalides.");

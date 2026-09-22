@@ -46,6 +46,7 @@ test.beforeEach(async () => {
   await pool.query(`insert into licenses(id,customer_id,vendor_business_id,business_type,status,allowed_features,max_devices,expires_at) values('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','cafe','active','["pos","inventory","tables","qr_menu","kitchen"]',1000,now()+interval '30 days') on conflict(id) do nothing`);
   await pool.query(`insert into businesses(id,name,slug,business_type,currency,locale,timezone,vendor_business_id) values(1,'API test business','api-test-business','cafe','MAD','fr-MA','Africa/Casablanca','00000000-0000-4000-8000-000000000002') on conflict(id) do nothing`);
   await pool.query(`insert into branches(id,business_id,name,code) values(1,1,'Test branch','MAIN') on conflict(id) do nothing`);
+  await pool.query("select setval(pg_get_serial_sequence('branches','id'),greatest((select max(id) from branches),1))");
   await pool.query(`insert into business_features(business_id,feature) select 1,unnest(array['pos','inventory','tables','qr_menu','kitchen']) on conflict do nothing`);
   await pool.query("delete from businesses where slug='tenant-two-test'");
   await pool.query("select setval(pg_get_serial_sequence('businesses','id'),greatest((select max(id) from businesses),1))");

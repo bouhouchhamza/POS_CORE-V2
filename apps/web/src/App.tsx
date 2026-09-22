@@ -25,6 +25,7 @@ import CustomersPage from './pages/CustomersPage';
 import LicensePage from './pages/LicensePage';
 import VendorAdminPage from './pages/VendorAdminPage';
 import LegacyProvisionRecoveryPage from './pages/LegacyProvisionRecoveryPage';
+import DesktopSync from './sync/DesktopSync';
 import "./App.css";
 
 function DefaultRedirect() {
@@ -35,7 +36,7 @@ function DefaultRedirect() {
 
 export default function App() {
   return (
-    <Routes>
+    <><DesktopSync/><Routes>
       <Route path="/vendor/*" element={<VendorAdminPage />} />
       <Route path="/provision" element={<LegacyProvisionRecoveryPage />} />
       <Route element={<SetupGate />}>
@@ -74,6 +75,6 @@ export default function App() {
 
       <Route path="*" element={<Navigate to="/login" replace />} />
       </Route>
-    </Routes>
+    </Routes></>
   );
 }
