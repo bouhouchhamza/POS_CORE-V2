@@ -292,7 +292,7 @@ export default function LicensePage() {
     void getSetupStatus()
       .then((setup) => setConfigured(setup.configured))
       .catch(() => undefined)
-  }, [])
+  }, [t])
 
   async function online() {
     if (activationInFlight.current) return

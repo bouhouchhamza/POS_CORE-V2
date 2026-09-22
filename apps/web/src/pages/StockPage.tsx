@@ -11,7 +11,7 @@ import Loading from '../components/Loading'
 import type { Product, StockMovement } from '../types'
 import { formatDate, getApiErrorMessage } from '../utils/format'
 import { useI18n } from '../i18n'
-import {confirmInventoryCount,createInventoryCount,getInventoryCount,type InventoryCount} from '../api/inventory-counts'
+import {confirmInventoryCount,createInventoryCount,getInventoryCount,saveInventoryCount,type InventoryCount} from '../api/inventory-counts'
 
 type StockAction = 'increase' | 'decrease' | 'correction'
 
@@ -124,7 +124,7 @@ export default function StockPage() {
   }
 
   async function startInventory(){try{const created=await createInventoryCount(t('stock.inventoryPhysical'));const detail=await getInventoryCount(created.id);setInventory(detail);setInventoryValues(Object.fromEntries((detail.items??[]).map(item=>[item.product_id,String(item.expected_stock)])))}catch(err){setError(getApiErrorMessage(err))}}
-  async function finishInventory(){if(!inventory)return;try{const {saveInventoryCount}=await import('../api/inventory-counts');await saveInventoryCount(inventory.id,Object.entries(inventoryValues).map(([product_id,counted_stock])=>({product_id:Number(product_id),counted_stock:Number(counted_stock)})));await confirmInventoryCount(inventory.id);setInventory(null);setSuccess(t('stock.inventorySuccess'));await loadData()}catch(err){setError(getApiErrorMessage(err))}}
+  async function finishInventory(){if(!inventory)return;try{await saveInventoryCount(inventory.id,Object.entries(inventoryValues).map(([product_id,counted_stock])=>({product_id:Number(product_id),counted_stock:Number(counted_stock)})));await confirmInventoryCount(inventory.id);setInventory(null);setSuccess(t('stock.inventorySuccess'));await loadData()}catch(err){setError(getApiErrorMessage(err))}}
 
   return (
     <section>

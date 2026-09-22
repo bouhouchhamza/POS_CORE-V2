@@ -53,3 +53,12 @@ test('internal preparation failures and commercial blocks remain distinct', () =
     reason: 'LICENSE_EXPIRED',
   });
 });
+
+test('a legacy business without a provisioning recipe remains activation-ready when its commercial runtime is valid', () => {
+  const legacy = readyRow();
+  delete legacy.provisioning_error_code;
+  assert.deepEqual(commercialLifecycle(legacy, 'database_per_tenant'), {
+    state: 'READY_FOR_ACTIVATION',
+    reason: null,
+  });
+});
