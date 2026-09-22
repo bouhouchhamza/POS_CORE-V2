@@ -162,6 +162,13 @@
       "when": 1790035260000,
       "tag": "0022_vendor_onboarding_request_fingerprint",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790035320000,
+      "tag": "0023_cash_register_open_branch_integrity",
+      "breakpoints": true
     }
   ]
 }

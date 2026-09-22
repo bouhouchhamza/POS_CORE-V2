@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 11;
+export const LOCAL_SCHEMA_VERSION = 12;
 
 export const localMigrations = [{
   version: 1,
@@ -299,6 +299,31 @@ export const localMigrations = [{
     UPDATE merchant_license_state SET status='activation_required',business_type=NULL,allowed_features_json='[]',reason_code=NULL
       WHERE EXISTS(SELECT 1 FROM empty_placeholder);
     DROP TABLE empty_placeholder;
+  `,
+}, {
+  // Server ids are deliberately separate from SQLite ids. A desktop can
+  // create records while disconnected without ever being allowed to choose a
+  // hosted primary key.
+  version:12,
+  name:'cash_register_sync_identity',
+  sql:`
+    ALTER TABLE cash_register_sessions ADD COLUMN client_id TEXT;
+    ALTER TABLE cash_register_sessions ADD COLUMN server_id INTEGER;
+    ALTER TABLE cash_register_sessions ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'local'
+      CHECK(sync_status IN ('local','pending','synced','conflict'));
+    CREATE UNIQUE INDEX cash_register_client_id_unique
+      ON cash_register_sessions(business_id,client_id) WHERE client_id IS NOT NULL;
+    CREATE UNIQUE INDEX cash_register_server_id_unique
+      ON cash_register_sessions(business_id,server_id) WHERE server_id IS NOT NULL;
+    DROP INDEX cash_register_one_open_idx;
+    CREATE UNIQUE INDEX cash_register_one_open_idx
+      ON cash_register_sessions(business_id,branch_id)
+      WHERE status='open' AND sync_status!='conflict';
+    CREATE TABLE sync_state(
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `,
 }];
 

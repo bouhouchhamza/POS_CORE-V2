@@ -4,7 +4,7 @@ import type pg from'pg'
 import argon2 from'argon2'
 import bcrypt from'bcryptjs'
 import{z}from'zod'
-import{offlineRequestSchema,businessSetupSchema}from'@corepos/validation'
+import{offlineRequestSchema,businessSetupSchema,passwordVerifierSchema}from'@corepos/validation'
 import{offlineProofPayload,businessTypes,featureKeys}from'@corepos/shared-types'
 import{fingerprint,licenseKeyHash,signCertificate,type LicenseCertificate}from'./crypto.js'
 import{activationRequestIsFresh}from'./policy.js'
@@ -264,6 +264,8 @@ export async function registerLicenseRoutes(app:FastifyInstance,{pool,operationa
      )).rows:[]
      if(!runtimeBusiness||!runtimeBranch||!runtimeUsers.length)
        throw Object.assign(new Error('The activated Business is not ready for local desktop bootstrap.'),{statusCode:409,code:'LOCAL_BOOTSTRAP_UNAVAILABLE'})
+     if(runtimeUsers.some(user=>!passwordVerifierSchema.safeParse(user.password).success))
+       throw Object.assign(new Error('A local desktop bootstrap profile has an unsupported password verifier.'),{statusCode:409,code:'LOCAL_BOOTSTRAP_PASSWORD_VERIFIER_UNSUPPORTED'})
 
      const certificate:LicenseCertificate={
       version:2,

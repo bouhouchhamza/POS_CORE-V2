@@ -14,6 +14,7 @@ const tenantOptionalRoutes = new Set([
 function isControlPlaneRoute(pathname: string) {
   return (
     pathname.startsWith('/api/vendor/') ||
+    pathname.startsWith('/api/desktop-sync/') ||
     pathname === '/api/vendor' ||
     pathname.startsWith('/api/provision') ||
     pathname === '/api/license/device-activate' ||

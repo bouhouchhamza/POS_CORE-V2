@@ -112,6 +112,40 @@ async function fixture() {
   return { root, paths, db, app, token, cookie, auth: { authorization: `Bearer ${token}` } };
 }
 
+test('cash register remains locally operational while hosted sync is unavailable and retains a durable outbox', async () => {
+  const context=await fixture();
+  try {
+    const stamp=new Date().toISOString();
+    context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Offline first','offline-first','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(crypto.randomUUID(),stamp,stamp);
+    const businessId=Number(context.db.prepare('select id from businesses').get()?.id);
+    context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,stamp,stamp);
+    context.db.prepare('update users set business_id=?,branch_id=1 where id=1').run(businessId);
+    const opened=await context.app.inject({method:'POST',url:'/api/cash-register/open',headers:context.auth,payload:{opening_cash:20,opening_note:'Offline'}});
+    assert.equal(opened.statusCode,200,opened.body);
+    assert.equal((await context.app.inject({method:'GET',url:'/api/cash-register/current',headers:context.auth})).json().data.status,'open');
+    const outbox=(await context.app.inject({method:'GET',url:'/api/sync/outbox',headers:context.auth})).json().data;
+    assert.equal(outbox.length,1);assert.equal(outbox[0].payload.operation,'open');assert.equal(outbox[0].sync_status,'pending');
+    // Closing before reconnect remains a local operation.  Once the hosted
+    // open is acknowledged its server id is durably attached to the queued
+    // close, rather than turning a legitimate offline sequence into conflict.
+    const closed=await context.app.inject({method:'POST',url:'/api/cash-register/close',headers:context.auth,payload:{actual_cash:20}});
+    assert.equal(closed.statusCode,200,closed.body);
+    const localSessionId=opened.json().data.id;
+    const openMutation=outbox[0];
+    const acknowledged=await context.app.inject({method:'POST',url:'/api/sync/cash-register/ack',headers:context.auth,payload:{client_id:openMutation.client_id,local_session_id:localSessionId,server_session_id:901}});
+    assert.equal(acknowledged.statusCode,200,acknowledged.body);
+    const queuedClose=(await context.app.inject({method:'GET',url:'/api/sync/outbox',headers:context.auth})).json().data.find((mutation:any)=>mutation.payload.operation==='close');
+    assert.equal(queuedClose.payload.server_session_id,901);
+    assert.equal((await context.app.inject({method:'GET',url:'/api/cash-register/sessions',headers:context.auth})).json().data[0].status,'closed');
+    // A later hosted pull is applied without replacing the local pending
+    // record. This is the reconciliation boundary, not an online dependency.
+    const applied=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply',headers:context.auth,payload:{cursor:new Date().toISOString(),sessions:[{id:900,branch_code:'MAIN',business_date:'2026-09-22',status:'closed',opened_at:stamp,opening_cash:10,opening_note:null,closed_at:stamp,actual_cash:10,closing_note:null,updated_at:stamp}]}});
+    assert.equal(applied.statusCode,200,applied.body);
+    assert.equal(Number(context.db.prepare('select count(*) n from cash_register_sessions').get()?.n),2);
+    assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status='pending'").get()?.n),1);
+  } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
 test("legacy commercial state is fail-closed until Vendor activation", async () => {
   const context = await fixture();
 

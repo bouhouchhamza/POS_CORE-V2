@@ -24,6 +24,7 @@ installer-package/app/backend/database/database.sqlite
 installer-package/app/php/
 installer-package/installer/
 *.exe
+apps/desktop/src-tauri/binaries/*.node
 
 # OS / editor
 .DS_Store
