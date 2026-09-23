@@ -11,6 +11,7 @@ import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
+import websocket from '@fastify/websocket';
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   and,
@@ -73,6 +74,7 @@ import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements
 import { registerDesktopPurchaseSync } from './sync/desktop-purchases.js';
 import { registerDesktopSalesSync } from './sync/desktop-sales.js';
 import { registerDesktopOrderSync } from './sync/desktop-orders.js';
+import { publishCashRegisterChanged, registerDesktopRealtime } from './sync/desktop-realtime.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -93,6 +95,7 @@ const app = Fastify({
   bodyLimit: 6 * 1024 * 1024,
 });
 await app.register(helmet, { contentSecurityPolicy: false });
+await app.register(websocket,{options:{maxPayload:16*1024,perMessageDeflate:false}});
 await app.register(cors, {
   credentials: true,
 
@@ -127,7 +130,8 @@ await app.register(fastifyStatic, {
 });
 
 await registerTenantRouting(app, controlPool);
-await registerDesktopCashRegisterSync(app,{pool,controlPool});
+const desktopCashSync=await registerDesktopCashRegisterSync(app,{pool,controlPool});
+registerDesktopRealtime(app,{authenticate:desktopCashSync.authenticateRealtime});
 await registerDesktopMasterDataSync(app,{pool,controlPool});
 await registerDesktopStockMovementSync(app,{pool,controlPool});
 await registerDesktopPurchaseSync(app,{pool,controlPool});
@@ -330,6 +334,13 @@ async function currentUser(req: FastifyRequest) {
     .where(eq(users.id, req.user.sub))
     .limit(1);
   return u;
+}
+async function cashRealtimeChannel(businessId:number){
+  const tenant=currentTenant();
+  if(tenant)return tenant.vendorBusinessId;
+  const business=(await pool.query('select vendor_business_id from businesses where id=$1',[businessId])).rows[0];
+  if(!business?.vendor_business_id)throw Object.assign(new Error('Business realtime identity is unavailable.'),{statusCode:409,code:'BUSINESS_RUNTIME_UNAVAILABLE'});
+  return String(business.vendor_business_id);
 }
 async function issueSession(reply: FastifyReply, u: any, device: SessionDevice | null = null) {
   const tenant = currentTenant();
@@ -985,8 +996,10 @@ app.post("/api/cash-register/open",{preHandler:cashManager},async(req,reply)=>{
   const u=await currentUser(req);
   try{
     const input=cashRegisterOpenSchema.parse(req.body);
+    const realtimeChannel=await cashRealtimeChannel(u!.businessId);
     const [created]=await db.insert(cashRegisterSessions).values({businessId:u!.businessId,branchId:u!.branchId,businessDate:cafeBusinessDate(),openedByUserId:req.user.sub,
       openingCash:input.opening_cash,openingNote:input.opening_note??null}).returning();
+    publishCashRegisterChanged(realtimeChannel);
     return reply.code(201).send({data:await cashSessionDto(created.id,u!.businessId)});
   }catch(error){
     const pgCode=(error as {code?:string;cause?:{code?:string}})?.code??(error as {cause?:{code?:string}})?.cause?.code;
@@ -1002,7 +1015,7 @@ app.post("/api/cash-register/open",{preHandler:cashManager},async(req,reply)=>{
 app.post("/api/cash-register/close",{preHandler:cashManager},async(req,reply)=>{
   try{
     const input=cashRegisterCloseSchema.parse(req.body);
-    const u=await currentUser(req);const id=await db.transaction(async(tx)=>{
+    const u=await currentUser(req),realtimeChannel=await cashRealtimeChannel(u!.businessId);const id=await db.transaction(async(tx)=>{
       const branchCondition=u!.branchId===null?isNull(cashRegisterSessions.branchId):eq(cashRegisterSessions.branchId,u!.branchId);
       const [session]=await tx.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),branchCondition,eq(cashRegisterSessions.status,"open"))).for("update").limit(1);
       if(!session)return null;
@@ -1018,6 +1031,7 @@ app.post("/api/cash-register/close",{preHandler:cashManager},async(req,reply)=>{
       return session.id;
     });
     if(!id)return reply.code(422).send({message:"Aucune caisse ouverte à fermer."});
+    publishCashRegisterChanged(realtimeChannel);
     return {data:await cashSessionDto(id,u!.businessId)};
   }catch(error){return validation(reply,error);}
 });

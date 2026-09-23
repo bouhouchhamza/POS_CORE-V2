@@ -1,6 +1,6 @@
 [package]
 name = "corepos"
-version = "2.0.10"
+version = "2.0.14"
 edition = "2021"
 [lib]
 name = "corepos_lib"
@@ -20,4 +20,3 @@ windows = { version = "0.62", features = ["Win32_Graphics_Printing", "Win32_Grap
 windows-core = "0.62"
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
-
