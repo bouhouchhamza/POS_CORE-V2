@@ -69,6 +69,7 @@ import { ensureWebSessionDevice, mobileLoginProofPayload, registerSessionDevice,
 import { activationRequestIsFresh } from './license/policy.js';
 import { registerDesktopCashRegisterSync } from './sync/desktop-cash-register.js';
 import { registerDesktopMasterDataSync } from './sync/desktop-master-data.js';
+import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -125,6 +126,7 @@ await app.register(fastifyStatic, {
 await registerTenantRouting(app, controlPool);
 await registerDesktopCashRegisterSync(app,{pool,controlPool});
 await registerDesktopMasterDataSync(app,{pool,controlPool});
+await registerDesktopStockMovementSync(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,
@@ -888,6 +890,7 @@ async function changeStock(
         .insert(stockMovements)
         .values({
           businessId:u!.businessId,branchId:u!.branchId,
+          clientId:crypto.randomUUID(),
           productId: id,
           userId: req.user.sub,
           type: kind,
