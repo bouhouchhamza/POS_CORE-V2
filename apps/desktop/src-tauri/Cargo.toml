@@ -1,6 +1,6 @@
 [package]
 name = "corepos"
-version = "2.0.10"
+version = "2.0.11"
 edition = "2021"
 [lib]
 name = "corepos_lib"
