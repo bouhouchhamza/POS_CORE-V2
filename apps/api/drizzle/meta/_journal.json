@@ -204,6 +204,13 @@
       "when": 1790294520000,
       "tag": "0028_sales_return_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790294530000,
+      "tag": "0029_order_restaurant_sync",
+      "breakpoints": true
     }
   ]
 }
