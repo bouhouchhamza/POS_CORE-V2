@@ -1,15 +1,16 @@
 import type {DatabaseSync} from 'node:sqlite';
 import type {FastifyInstance,FastifyReply,FastifyRequest} from 'fastify';
 import {z} from 'zod';
+import {passwordVerifierSchema} from '@corepos/validation';
 
 const now=()=>new Date().toISOString();
 const one=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).get(...args) as any;
 const all=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).all(...args) as any[];
-const entities=['branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers'] as const;
+const entities=['branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers','users'] as const;
 type Entity=typeof entities[number];
 const entitySchema=z.enum(entities);
-const tables:Record<Entity,string>={branches:'branches',settings:'settings',categories:'categories',units:'units',products:'products',product_variants:'product_variants',product_modifiers:'product_modifiers',customers:'customers',suppliers:'suppliers'};
-const ordered:Entity[]=['branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers'];
+const tables:Record<Entity,string>={branches:'branches',settings:'settings',categories:'categories',units:'units',products:'products',product_variants:'product_variants',product_modifiers:'product_modifiers',customers:'customers',suppliers:'suppliers',users:'users'};
+const ordered:Entity[]=['branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers','users'];
 const cents=(value:unknown)=>Math.round(Number(value??0)*100);
 
 function masterData(db:DatabaseSync,entity:Entity,localId:number){
@@ -18,6 +19,7 @@ function masterData(db:DatabaseSync,entity:Entity,localId:number){
   if(entity==='products')return {...row,purchase_price:Number(row.purchase_price_cents??0)/100,sale_price:Number(row.sale_price_cents??0)/100,category_sync_id:ref('categories',row.category_id)};
   if(entity==='product_variants')return {...row,price_delta:Number(row.price_delta_cents??0)/100,product_sync_id:ref('products',row.product_id)};
   if(entity==='product_modifiers')return {...row,price:Number(row.price_cents??0)/100,product_sync_id:ref('products',row.product_id)};
+  if(entity==='users')return {name:row.name,email:row.email,password:row.password,role:row.role,is_active:Boolean(row.is_active),branch_sync_id:ref('branches',row.branch_id)};
   return row;
 }
 function pending(db:DatabaseSync,businessId:number,entity:Entity,localId:number){return one(db,"select id from sync_mutations where business_id=? and entity_type=? and entity_id=? and sync_status in ('pending','failed') limit 1",businessId,entity,String(localId));}
@@ -26,9 +28,16 @@ function setRemote(db:DatabaseSync,entity:Entity,id:number,syncId:string,serverI
 
 function write(db:DatabaseSync,entity:Entity,businessId:number,data:any,syncId:string,serverId:number,updatedAt:string){
   let id=localId(db,entity,syncId);
+  if(entity==='users'&&!id)id=one(db,'select id from users where business_id=? and lower(email)=lower(?)',businessId,data.email)?.id;
   const ref=(type:Entity,value:any)=>value?localId(db,type,String(value))??null:null;
   const stamp=data.updated_at??updatedAt;
-  if(entity==='branches'){
+  if(entity==='users'){
+    const profile=z.object({name:z.string().trim().min(1).max(255),email:z.string().email().max(255),password:passwordVerifierSchema,role:z.enum(['patron','worker','owner','admin','manager','cashier','seller','waiter','kitchen','stock_manager']),is_active:z.boolean(),branch_sync_id:z.string().uuid().nullable()}).strict().parse(data),branch=ref('branches',profile.branch_sync_id);
+    if(profile.branch_sync_id&&!branch)throw Object.assign(new Error('Synchronized profile branch is unavailable locally.'),{statusCode:409,code:'SYNC_DEPENDENCY_MISSING'});
+    const values=[branch,profile.name,profile.email.toLowerCase(),profile.password,profile.role,Number(profile.is_active),stamp];
+    if(id)db.prepare('update users set branch_id=?,name=?,email=?,password=?,role=?,is_active=?,updated_at=? where id=? and business_id=?').run(...values,id,businessId);
+    else id=Number(db.prepare('insert into users(business_id,branch_id,name,email,password,role,is_active,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)').run(businessId,...values.slice(0,-1),data.created_at??stamp,stamp).lastInsertRowid);
+  }else if(entity==='branches'){
     if(id)db.prepare('update branches set name=?,code=?,address=?,phone=?,active=?,updated_at=? where id=? and business_id=?').run(data.name,data.code,data.address??null,data.phone??null,Number(data.active),stamp,id,businessId);
     else id=Number(db.prepare('insert into branches(business_id,name,code,address,phone,active,created_at,updated_at) values(?,?,?,?,?,?,?,?)').run(businessId,data.name,data.code,data.address??null,data.phone??null,Number(data.active),data.created_at??stamp,stamp).lastInsertRowid);
   }else if(entity==='settings'){
@@ -62,12 +71,12 @@ export function registerLocalMasterDataSync(app:FastifyInstance,db:DatabaseSync,
   app.get('/api/sync/master-data/state',{preHandler:guard},async()=>({data:{cursor:one(db,"select value from sync_state where key='master_data_cursor'")?.value??null}}));
   app.get('/api/sync/master-data/outbox',{preHandler:guard},async r=>{
     const businessId=user(r).business_id;
-    const rows=all(db,"select * from sync_mutations where business_id=? and entity_type in ('branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers') and sync_status in ('pending','failed') order by id limit 100",businessId)
+    const rows=all(db,"select * from sync_mutations where business_id=? and entity_type in ('branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers','users') and sync_status in ('pending','failed') order by id limit 100",businessId)
       .map(m=>{const meta=JSON.parse(m.payload_json),{local_id,...payload}=meta,entity=entitySchema.parse(payload.entity_type),identity=one(db,'select sync_id,server_updated_at from master_sync_entities where entity_type=? and local_id=?',entity,local_id);return {...m,payload:{client_id:m.client_id,...payload,base_updated_at:identity?.server_updated_at??null,data:payload.operation==='delete'?null:masterData(db,entity,local_id)}}})
       .filter(m=>m.payload.sync_id);
     return {data:rows};
   });
   app.post('/api/sync/master-data/conflict',{preHandler:guard},async r=>{const u=user(r),input=z.object({client_id:z.string().uuid()}).parse(r.body);tx(()=>{const m=one(db,'select entity_type,entity_id from sync_mutations where business_id=? and client_id=?',u.business_id,input.client_id);if(m){db.prepare("update sync_mutations set sync_status='conflict',last_error='MASTER_DATA_CONFLICT',updated_at=? where business_id=? and client_id=?").run(now(),u.business_id,input.client_id);db.prepare("update master_sync_entities set sync_status='conflict' where entity_type=? and local_id=?").run(m.entity_type,Number(m.entity_id))}});return{message:'Conflict recorded.'};});
   const change=z.object({entity_type:entitySchema,sync_id:z.string().uuid(),server_id:z.number().int().positive(),deleted:z.boolean(),updated_at:z.string(),data:z.record(z.string(),z.unknown())});
-  app.post('/api/sync/master-data/apply',{preHandler:guard},async r=>{const u=user(r),input=z.object({cursor:z.string().nullable().optional(),changes:z.array(change).max(500)}).parse(r.body);tx(()=>{db.prepare("update master_sync_runtime set value='1' where key='remote_apply'").run();try{for(const entity of ordered)for(const remote of input.changes.filter(x=>x.entity_type===entity)){const id=localId(db,entity,remote.sync_id);if(id&&pending(db,u.business_id,entity,id)){db.prepare("update master_sync_entities set sync_status='conflict' where entity_type=? and local_id=?").run(entity,id);db.prepare("update sync_mutations set sync_status='conflict',last_error='REMOTE_MASTER_DATA_CONFLICT',updated_at=? where business_id=? and entity_type=? and entity_id=? and sync_status in ('pending','failed')").run(now(),u.business_id,entity,String(id));continue}if(remote.deleted){if(id){try{db.prepare(`delete from ${tables[entity]} where id=? and business_id=?`).run(id,u.business_id)}catch{db.prepare("update master_sync_entities set tombstoned=1,sync_status='synced' where entity_type=? and local_id=?").run(entity,id)}}continue}write(db,entity,u.business_id,remote.data,remote.sync_id,remote.server_id,remote.updated_at)}if(input.cursor)db.prepare("insert into sync_state(key,value,updated_at) values('master_data_cursor',?,?) on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at").run(input.cursor,now())}finally{db.prepare("update master_sync_runtime set value='0' where key='remote_apply'").run()}});return{message:'Applied.'};});
+  app.post('/api/sync/master-data/apply',{preHandler:guard},async r=>{const u=user(r),input=z.object({cursor:z.string().nullable().optional(),changes:z.array(change).max(500)}).parse(r.body);tx(()=>{db.prepare("update master_sync_runtime set value='1' where key='remote_apply'").run();try{for(const entity of ordered)for(const remote of input.changes.filter(x=>x.entity_type===entity)){const id=localId(db,entity,remote.sync_id);if(id&&pending(db,u.business_id,entity,id)){db.prepare("update master_sync_entities set sync_status='conflict' where entity_type=? and local_id=?").run(entity,id);db.prepare("update sync_mutations set sync_status='conflict',last_error='REMOTE_MASTER_DATA_CONFLICT',updated_at=? where business_id=? and entity_type=? and entity_id=? and sync_status in ('pending','failed')").run(now(),u.business_id,entity,String(id));continue}if(remote.deleted){if(id&&entity==='users')db.prepare('update users set is_active=0,updated_at=? where id=? and business_id=?').run(remote.updated_at,id,u.business_id);else if(id){try{db.prepare(`delete from ${tables[entity]} where id=? and business_id=?`).run(id,u.business_id)}catch{}}if(id)db.prepare("update master_sync_entities set tombstoned=1,sync_status='synced' where entity_type=? and local_id=?").run(entity,id);continue}write(db,entity,u.business_id,remote.data,remote.sync_id,remote.server_id,remote.updated_at)}if(input.cursor)db.prepare("insert into sync_state(key,value,updated_at) values('master_data_cursor',?,?) on conflict(key) do update set value=excluded.value,updated_at=excluded.updated_at").run(input.cursor,now())}finally{db.prepare("update master_sync_runtime set value='0' where key='remote_apply'").run()}});return{message:'Applied.'};});
 }

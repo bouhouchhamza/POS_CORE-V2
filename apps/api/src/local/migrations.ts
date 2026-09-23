@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 13;
+export const LOCAL_SCHEMA_VERSION = 14;
 
 export const localMigrations = [{
   version: 1,
@@ -347,5 +347,9 @@ export const localMigrations = [{
       INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) SELECT OLD.business_id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),'branches',OLD.id,'delete',json_object('entity_type','branches','local_id',OLD.id,'sync_id',sync_id,'operation','delete'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM master_sync_entities WHERE entity_type='branches' AND local_id=OLD.id;
     END;
   `,
+}, {
+  version:14,
+  name:'user_profile_sync',
+  sql:'',
 }];
 

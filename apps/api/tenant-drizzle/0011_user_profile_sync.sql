@@ -1,0 +1,1 @@
+-- @corepos-shared-migration 0025_user_profile_sync.sql

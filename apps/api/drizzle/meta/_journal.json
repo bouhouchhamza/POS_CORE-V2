@@ -176,6 +176,13 @@
       "when": 1790121600000,
       "tag": "0024_master_data_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790208000000,
+      "tag": "0025_user_profile_sync",
+      "breakpoints": true
     }
   ]
 }

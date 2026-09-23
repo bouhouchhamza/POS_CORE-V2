@@ -62,6 +62,19 @@ function applyMasterDataSyncOutbox(db:DatabaseSync,migrationSql:string){
       END;`);
   }
 }
+function applyUserProfileSyncOutbox(db:DatabaseSync){
+  const uuid="lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6)))";
+  const active="(SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND NEW.business_id IS NOT NULL AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=NEW.business_id))";
+  const activeDelete="(SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND OLD.business_id IS NOT NULL AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=OLD.business_id))";
+  const ensure=`INSERT OR IGNORE INTO master_sync_entities(entity_type,local_id,sync_id) VALUES('users',NEW.id,${uuid});`;
+  const queue=`INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) VALUES(NEW.business_id,${uuid},'users',NEW.id,'upsert',json_object('entity_type','users','local_id',NEW.id,'sync_id',(SELECT sync_id FROM master_sync_entities WHERE entity_type='users' AND local_id=NEW.id),'operation','upsert'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));`;
+  db.exec(`CREATE TRIGGER IF NOT EXISTS master_sync_users_insert AFTER INSERT ON users WHEN ${active} BEGIN ${ensure}${queue} END;
+    CREATE TRIGGER IF NOT EXISTS master_sync_users_update AFTER UPDATE ON users WHEN ${active} BEGIN ${ensure}${queue} END;
+    CREATE TRIGGER IF NOT EXISTS master_sync_users_delete AFTER DELETE ON users WHEN ${activeDelete} BEGIN
+      UPDATE master_sync_entities SET tombstoned=1,sync_status='pending' WHERE entity_type='users' AND local_id=OLD.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) SELECT OLD.business_id,${uuid},'users',OLD.id,'delete',json_object('entity_type','users','local_id',OLD.id,'sync_id',sync_id,'operation','delete'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM master_sync_entities WHERE entity_type='users' AND local_id=OLD.id;
+    END;`);
+}
 export function openLocalDatabase(paths:LocalPaths){
   ensureLocalPaths(paths);const existed=fs.existsSync(paths.database);const db=new DatabaseSync(paths.database);
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
@@ -78,6 +91,7 @@ export function openLocalDatabase(paths:LocalPaths){
         try{
           if(migration.name==='cash_register_sync_identity')applyCashRegisterSyncIdentity(db);
           else if(migration.name==='master_data_sync_outbox')applyMasterDataSyncOutbox(db,migration.sql);
+          else if(migration.name==='user_profile_sync')applyUserProfileSyncOutbox(db);
           else db.exec(migration.sql);
           if(requiresForeignKeysOff){
             const violations=db.prepare("PRAGMA foreign_key_check").all();
