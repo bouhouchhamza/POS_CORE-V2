@@ -6,9 +6,11 @@ import {config} from '../config.js';
 import {activationRequestIsFresh} from '../license/policy.js';
 import {fingerprint} from '../license/crypto.js';
 import {tenantRuntime,type TenantRecord} from '../saas/tenant-context.js';
+import {publishCashRegisterChanged} from './desktop-realtime.js';
 
 type Device={licenseId:string;certificateId:string;installationId:string;publicKey:string;nonce:string;requestedAt:string;proof:string};
-type Runtime={pool:pg.Pool;businessId:number};
+type Runtime={pool:pg.Pool;businessId:number;vendorBusinessId:string};
+type RuntimeResolver=(raw:unknown,action:string,mutation?:z.infer<typeof mutationSchema>)=>Promise<Runtime>;
 const deviceSchema=z.object({license_id:z.string().uuid(),certificate_id:z.string().uuid(),installation_id:z.string().uuid(),device_public_key:z.string().min(40).max(5000),nonce:z.string().uuid(),requested_at:z.string().datetime(),device_proof:z.string().min(40).max(500)}).strict();
 const mutationSchema=z.object({client_id:z.string().uuid(),operation:z.enum(['open','close']),local_session_id:z.number().int().positive(),server_session_id:z.number().int().positive().nullable().optional(),user_email:z.string().email(),branch_code:z.string().trim().max(40).nullable(),opening_cash:z.number().finite().nonnegative().optional(),opening_note:z.string().max(500).nullable().optional(),opened_at:z.string().datetime().optional(),actual_cash:z.number().finite().nonnegative().optional(),closing_note:z.string().max(500).nullable().optional(),closed_at:z.string().datetime().optional()}).strict();
 const proofPayload=(action:string,d:Device,m?:z.infer<typeof mutationSchema>)=>[
@@ -26,7 +28,7 @@ function pullCursor(value:unknown):PullCursor|null{if(typeof value!=='string'||!
 /** Device-authenticated reconciliation. It never accepts a tenant or business id
  * from Desktop; both are resolved from the active commercial device binding. */
 export async function registerDesktopCashRegisterSync(app:FastifyInstance,{pool,controlPool}:{pool:pg.Pool;controlPool:pg.Pool}){
-  async function runtime(raw:unknown,action:string,mutation?:z.infer<typeof mutationSchema>):Promise<Runtime>{
+  const runtime:RuntimeResolver=async(raw,action,mutation)=>{
     const parsed=input(deviceSchema,raw),d:Device={licenseId:parsed.license_id,certificateId:parsed.certificate_id,installationId:parsed.installation_id,publicKey:parsed.device_public_key,nonce:parsed.nonce,requestedAt:parsed.requested_at,proof:parsed.device_proof};
     if(!activationRequestIsFresh(d.requestedAt))throw Object.assign(new Error('Sync request timestamp is outside the allowed window.'),{statusCode:422,code:'SYNC_REQUEST_STALE'});
     if(!verify(d.publicKey,proofPayload(action,d,mutation),d.proof))throw Object.assign(new Error('Device sync proof is invalid.'),{statusCode:403,code:'DEVICE_PROOF_INVALID'});
@@ -45,8 +47,8 @@ export async function registerDesktopCashRegisterSync(app:FastifyInstance,{pool,
     const business=(await operational.query('select id from businesses where vendor_business_id=$1 limit 1',[row.vendor_business_id])).rows[0];
     if(!business)throw Object.assign(new Error('Licensed Business runtime is unavailable.'),{statusCode:409,code:'BUSINESS_RUNTIME_UNAVAILABLE'});
     await controlPool.query('update license_devices set last_seen_at=now() where id=$1',[row.device_id]);
-    return{pool:operational,businessId:business.id};
-  }
+    return{pool:operational,businessId:business.id,vendorBusinessId:row.vendor_business_id};
+  };
   app.get('/api/desktop-sync/cash-registers/pull',async(request)=>{
     const raw=request.query as Record<string,unknown>,{cursor:rawCursor,...device}=raw,context=await runtime(device,'pull'),cursor=pullCursor(rawCursor);
     const rows=(await context.pool.query(`select s.id,s.business_date::text,s.status,s.opened_at,s.opening_cash,s.opening_note,s.closed_at,s.actual_cash,s.closing_note,s.updated_at,to_char(s.updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') sync_updated_at,b.code branch_code
@@ -56,6 +58,7 @@ export async function registerDesktopCashRegisterSync(app:FastifyInstance,{pool,
   });
   app.post('/api/desktop-sync/cash-registers/push',async(request,reply)=>{
     const body=input(z.object({device:deviceSchema,mutation:mutationSchema}).strict(),request.body),context=await runtime(body.device,'push',body.mutation),client=await context.pool.connect();
+    let changed=false;
     try{await client.query('begin');const existing=(await client.query('select payload,sync_status from sync_mutations where business_id=$1 and client_id=$2 for update',[context.businessId,body.mutation.client_id])).rows[0];if(existing){await client.query('commit');const outcome=existing.payload;return reply.code(outcome?.outcome==='conflict'?409:200).send({data:outcome,replayed:true});}
       const profile=(await client.query("select id,role,branch_id from users where business_id=$1 and lower(email)=lower($2) and is_active=true limit 1",[context.businessId,body.mutation.user_email])).rows[0];
       if(!profile||!['patron','owner','admin','manager','worker','cashier'].includes(profile.role))throw Object.assign(new Error('The selected local profile is not allowed to manage cash.'),{statusCode:403,code:'SYNC_PROFILE_NOT_ALLOWED'});
@@ -66,13 +69,14 @@ export async function registerDesktopCashRegisterSync(app:FastifyInstance,{pool,
       if(body.mutation.operation==='open'){
         const open=(await client.query("select * from cash_register_sessions where business_id=$1 and branch_id is not distinct from $2 and status='open' limit 1 for update",[context.businessId,branch?.id??null])).rows[0];
         if(open){const outcome={outcome:'conflict',session:open};await client.query("insert into sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload,sync_status,error) values($1,$2,'cash_register_session',$3,'open',$4,'conflict','CASH_REGISTER_ALREADY_OPEN')",[context.businessId,body.mutation.client_id,String(open.id),outcome]);await client.query('commit');return reply.code(409).send({data:outcome});}
-        session=(await client.query("insert into cash_register_sessions(business_id,branch_id,business_date,status,opened_at,opened_by_user_id,opening_cash,opening_note) values($1,$2,$3,'open',$4,$5,$6,$7) returning *",[context.businessId,branch?.id??null,new Date(body.mutation.opened_at!).toISOString().slice(0,10),body.mutation.opened_at,profile.id,cents(body.mutation.opening_cash!),body.mutation.opening_note??null])).rows[0];
+        session=(await client.query("insert into cash_register_sessions(business_id,branch_id,business_date,status,opened_at,opened_by_user_id,opening_cash,opening_note) values($1,$2,$3,'open',$4,$5,$6,$7) returning *",[context.businessId,branch?.id??null,new Date(body.mutation.opened_at!).toISOString().slice(0,10),body.mutation.opened_at,profile.id,cents(body.mutation.opening_cash!),body.mutation.opening_note??null])).rows[0];changed=true;
       }else{
         if(!body.mutation.server_session_id)throw Object.assign(new Error('A locally created session must be synchronized before it can close.'),{statusCode:409,code:'SYNC_OPEN_PENDING'});
-        session=(await client.query("update cash_register_sessions set status='closed',closed_at=$1,closed_by_user_id=$2,actual_cash=$3,closing_note=$4,updated_at=now() where id=$5 and business_id=$6 and status='open' returning *",[body.mutation.closed_at,profile.id,cents(body.mutation.actual_cash!),body.mutation.closing_note??null,body.mutation.server_session_id,context.businessId])).rows[0]??(await client.query('select * from cash_register_sessions where id=$1 and business_id=$2',[body.mutation.server_session_id,context.businessId])).rows[0];
+        const updated=(await client.query("update cash_register_sessions set status='closed',closed_at=$1,closed_by_user_id=$2,actual_cash=$3,closing_note=$4,updated_at=now() where id=$5 and business_id=$6 and status='open' returning *",[body.mutation.closed_at,profile.id,cents(body.mutation.actual_cash!),body.mutation.closing_note??null,body.mutation.server_session_id,context.businessId])).rows[0];session=updated??(await client.query('select * from cash_register_sessions where id=$1 and business_id=$2',[body.mutation.server_session_id,context.businessId])).rows[0];changed=Boolean(updated);
         if(!session)throw Object.assign(new Error('Hosted cash session was not found.'),{statusCode:404,code:'SYNC_SESSION_NOT_FOUND'});
       }
-      const outcome={outcome:'applied',session};await client.query("insert into sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload,sync_status) values($1,$2,'cash_register_session',$3,$4,$5,'synced')",[context.businessId,body.mutation.client_id,String(session.id),body.mutation.operation,outcome]);await client.query('commit');return reply.code(201).send({data:outcome});
+      const outcome={outcome:'applied',session};await client.query("insert into sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload,sync_status) values($1,$2,'cash_register_session',$3,$4,$5,'synced')",[context.businessId,body.mutation.client_id,String(session.id),body.mutation.operation,outcome]);await client.query('commit');if(changed)publishCashRegisterChanged(context.vendorBusinessId);return reply.code(201).send({data:outcome});
     }catch(error){await client.query('rollback');throw error}finally{client.release()}
   });
+  return{authenticateRealtime:async(raw:unknown)=>{const context=await runtime(raw,'realtime');return{channelKey:context.vendorBusinessId}}};
 }

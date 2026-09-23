@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import test from "node:test";
 import bcrypt from "bcryptjs";
 import PDFDocument from "pdfkit";
+import WebSocket from "ws";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const enabled = Boolean(databaseUrl && /_test(?:\?|$)/.test(databaseUrl));
@@ -70,6 +71,10 @@ async function login(email = "patron@test.local") {
 }
 
 const auth = (token: string) => ({ authorization: `Bearer ${token}` });
+type RealtimeTestDevice={installationId:string;publicKey:string;privateKey:crypto.KeyObject;certificateId:string};
+function realtimeProof(device:RealtimeTestDevice){const nonce=crypto.randomUUID(),requested_at=new Date().toISOString(),raw={license_id:'00000000-0000-4000-8000-000000000003',certificate_id:device.certificateId,installation_id:device.installationId,device_public_key:device.publicKey,nonce,requested_at},payload=['desktop-sync-v1','realtime',raw.license_id,raw.certificate_id,raw.installation_id,raw.device_public_key,nonce,requested_at,...Array(12).fill('')].join('\n');return{...raw,device_proof:crypto.sign(null,Buffer.from(payload),device.privateKey).toString('base64url')}}
+async function seedRealtimeDevice():Promise<RealtimeTestDevice>{const keys=crypto.generateKeyPairSync('ed25519'),device={installationId:crypto.randomUUID(),publicKey:JSON.stringify(keys.publicKey.export({format:'jwk'})),privateKey:keys.privateKey,certificateId:crypto.randomUUID()},deviceId=crypto.randomUUID(),fingerprint=crypto.createHash('sha256').update(device.publicKey).digest('hex');await pool.query("insert into license_devices(id,license_id,installation_id,device_public_key,device_fingerprint,channel,status) values($1,'00000000-0000-4000-8000-000000000003',$2,$3,$4,'desktop','active')",[deviceId,device.installationId,device.publicKey,fingerprint]);await pool.query("insert into license_activations(license_id,device_id,certificate_id,kind,status,request_nonce) values('00000000-0000-4000-8000-000000000003',$1,$2,'offline','approved',$3)",[deviceId,device.certificateId,crypto.randomUUID()]);return device}
+function waitForRealtime(socket:any,predicate:(event:any)=>boolean){return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{socket.off('message',listener);reject(new Error('Timed out waiting for realtime event.'))},2_000),listener=(raw:Buffer)=>{const event=JSON.parse(raw.toString());if(!predicate(event))return;clearTimeout(timer);socket.off('message',listener);resolve(event)};socket.on('message',listener)})}
 function multipart(fields: Record<string, string>, file?: { bytes: Buffer; mime: string; field?: string; filename?: string }) {
   const boundary = `----bimik-${Date.now()}`;
   const chunks: Buffer[] = [];
@@ -163,6 +168,17 @@ test("single shared cash register controls opening, sales, reporting and closing
   const reopened=await app.inject({method:'POST',url:'/api/cash-register/open',headers:auth(patron),payload:{opening_cash:'0'}});assert.equal(reopened.statusCode,201,reopened.body);assert.notEqual(reopened.json().data.id,current.id);
   await pool.query("update users set is_active=false where id=2");
   assert.equal((await app.inject({method:'POST',url:'/api/cash-register/close',headers:auth(worker),payload:{actual_cash:'0'}})).statusCode,401);
+});
+
+test('hosted cash open and close emit realtime invalidations only after successful changes',{skip:!enabled},async()=>{
+  const patron=await login(),device=await seedRealtimeDevice(),address=await app.listen({host:'127.0.0.1',port:0}),socket=new WebSocket(`${address.replace(/^http/,'ws')}/api/desktop-sync/realtime`),events:any[]=[];await new Promise<void>((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject)});socket.on('message',(raw:any)=>events.push(JSON.parse(raw.toString())));
+  try{
+    const ready=waitForRealtime(socket,event=>event.type==='ready');socket.send(JSON.stringify({type:'authenticate',device:realtimeProof(device)}));await ready;
+    await pool.query('delete from cash_register_sessions');
+    let changed=waitForRealtime(socket,event=>event.type==='cash_register_changed');const opened=await app.inject({method:'POST',url:'/api/cash-register/open',headers:auth(patron),payload:{opening_cash:10}});assert.equal(opened.statusCode,201,opened.body);assert.equal((await changed).type,'cash_register_changed');
+    const beforeConflict=events.filter(event=>event.type==='cash_register_changed').length,conflict=await app.inject({method:'POST',url:'/api/cash-register/open',headers:auth(patron),payload:{opening_cash:20}});assert.equal(conflict.statusCode,409,conflict.body);await new Promise(resolve=>setImmediate(resolve));assert.equal(events.filter(event=>event.type==='cash_register_changed').length,beforeConflict);
+    changed=waitForRealtime(socket,event=>event.type==='cash_register_changed');const closed=await app.inject({method:'POST',url:'/api/cash-register/close',headers:auth(patron),payload:{actual_cash:10}});assert.equal(closed.statusCode,200,closed.body);assert.equal((await changed).type,'cash_register_changed');
+  }finally{socket.terminate()}
 });
 
 test("CORS preflight permits PUT and DELETE only for an allowed origin", { skip: !enabled }, async () => {

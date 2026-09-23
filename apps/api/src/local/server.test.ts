@@ -150,6 +150,42 @@ test('cash register remains locally operational while hosted sync is unavailable
   } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
 });
 
+test('cash sync quarantines an open conflict and its dependent close durably',async()=>{
+  const context=await fixture();
+  try{
+    const opened=await context.app.inject({method:'POST',url:'/api/cash-register/open',headers:context.auth,payload:{opening_cash:20}});
+    assert.equal(opened.statusCode,200,opened.body);
+    assert.equal((await context.app.inject({method:'POST',url:'/api/cash-register/close',headers:context.auth,payload:{actual_cash:20}})).statusCode,200);
+    const outbox=(await context.app.inject({method:'GET',url:'/api/sync/outbox',headers:context.auth})).json().data;
+    const openMutation=outbox.find((item:any)=>item.payload.operation==='open');
+    const conflict=await context.app.inject({method:'POST',url:'/api/sync/cash-register/conflict',headers:context.auth,payload:{client_id:openMutation.client_id,local_session_id:opened.json().data.id}});
+    assert.equal(conflict.statusCode,200,conflict.body);
+    assert.deepEqual(context.db.prepare("select operation,sync_status,last_error from sync_mutations where entity_type='cash_register_session' order by id").all().map(row=>({...row})),[
+      {operation:'open',sync_status:'conflict',last_error:'CASH_REGISTER_ALREADY_OPEN'},
+      {operation:'close',sync_status:'conflict',last_error:'CASH_REGISTER_OPEN_CONFLICT_DEPENDENCY'},
+    ]);
+    assert.equal((await context.app.inject({method:'GET',url:'/api/sync/outbox',headers:context.auth})).json().data.length,0);
+    const stamp=new Date().toISOString();
+    const applied=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${stamp}|901`,sessions:[{id:901,branch_code:'MAIN',business_date:'2026-09-23',status:'open',opened_at:stamp,opening_cash:50,opening_note:null,closed_at:null,actual_cash:null,closing_note:null,updated_at:stamp}]}});
+    assert.equal(applied.statusCode,200,applied.body);
+    assert.deepEqual({...context.db.prepare('select server_id,status,sync_status from cash_register_sessions where server_id=901').get()},{server_id:901,status:'open',sync_status:'synced'});
+  }finally{await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
+test('cash sync durably quarantines a close whose hosted open is pending',async()=>{
+  const context=await fixture();
+  try{
+    const opened=await context.app.inject({method:'POST',url:'/api/cash-register/open',headers:context.auth,payload:{opening_cash:20}});
+    assert.equal(opened.statusCode,200,opened.body);
+    assert.equal((await context.app.inject({method:'POST',url:'/api/cash-register/close',headers:context.auth,payload:{actual_cash:20}})).statusCode,200);
+    const closeMutation=(await context.app.inject({method:'GET',url:'/api/sync/outbox',headers:context.auth})).json().data.find((item:any)=>item.payload.operation==='close');
+    const deferred=await context.app.inject({method:'POST',url:'/api/sync/cash-register/defer',headers:context.auth,payload:{client_id:closeMutation.client_id,local_session_id:opened.json().data.id}});
+    assert.equal(deferred.statusCode,200,deferred.body);
+    assert.deepEqual({...context.db.prepare("select sync_status,last_error from sync_mutations where client_id=?").get(closeMutation.client_id)},{sync_status:'conflict',last_error:'SYNC_OPEN_PENDING'});
+    assert.deepEqual({...context.db.prepare('select sync_status,server_id from cash_register_sessions where id=?').get(opened.json().data.id)},{sync_status:'conflict',server_id:null});
+  }finally{await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
 test('cash sync apply is monotonic and never feeds remotely applied state into the local outbox', async () => {
   const context=await fixture();
   try {
