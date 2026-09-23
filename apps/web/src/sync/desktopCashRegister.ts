@@ -20,7 +20,9 @@ async function response(url:string,init?:RequestInit){const value=await fetch(ur
 
 /** Best-effort reconciliation only. SQLite mutations always commit before this
  * runs, and failures deliberately leave the durable local outbox untouched. */
-export async function reconcileDesktopCashRegister(){
+let activeReconciliation:Promise<boolean>|null=null
+
+async function reconcile(){
   if(!desktop()||!navigator.onLine)return false
   try{
     const [config,status,identity,outbox,state]=await Promise.all([
@@ -53,8 +55,16 @@ export async function reconcileDesktopCashRegister(){
     const proof=await device('pull',certificate,identity)
     const query=new URLSearchParams({...proof,cursor:state.cursor??''})
     const pulled=await response(`${base}/api/desktop-sync/cash-registers/pull?${query}`,{headers:{accept:'application/json'},signal:AbortSignal.timeout(8000)})
-    await api.post('/sync/cash-register/apply',{sessions:pulled.sessions??[],cursor:pulled.cursor??state.cursor})
+    await api.post('/sync/cash-register/apply-v2',{sessions:pulled.sessions??[],cursor:pulled.cursor??state.cursor})
     window.dispatchEvent(new Event('cash-register-changed'))
     return true
   }catch{return false}
+}
+
+/** This module-level lock survives component remounts.  Two overlapping pull
+ * responses can otherwise arrive out of order and replay older state. */
+export function reconcileDesktopCashRegister(){
+  if(activeReconciliation)return activeReconciliation
+  activeReconciliation=reconcile().finally(()=>{activeReconciliation=null})
+  return activeReconciliation
 }

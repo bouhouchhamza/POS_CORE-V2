@@ -23,10 +23,16 @@ export default function Header({
   const [localStatus, setLocalStatus] = useState<LocalStatus | null>(null)
 
   useEffect(() => {
+    let requestVersion = 0
     const refresh = () => {
+      const version = ++requestVersion
       getCurrentCashRegister()
-        .then((value) => setRegisterOpen(Boolean(value)))
-        .catch(() => setRegisterOpen(null))
+        .then((value) => {
+          if (version === requestVersion) setRegisterOpen(Boolean(value))
+        })
+        .catch(() => {
+          if (version === requestVersion) setRegisterOpen(null)
+        })
     }
 
     refresh()

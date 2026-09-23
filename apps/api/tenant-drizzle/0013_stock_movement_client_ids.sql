@@ -1,0 +1,1 @@
+-- @corepos-shared-migration 0027_stock_movement_client_ids.sql

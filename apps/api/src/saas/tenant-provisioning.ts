@@ -135,7 +135,9 @@ export async function migrateTenantDatabase(pool: pg.Pool) {
 
   const files = await tenantMigrationFiles();
   for (const filename of files) {
-    const sql = await fs.readFile(path.join(tenantMigrationsRoot, filename), 'utf8');
+    const source = await fs.readFile(path.join(tenantMigrationsRoot, filename), 'utf8');
+    const shared = source.match(/^\s*--\s*@corepos-shared-migration\s+(\d{4}_[a-z0-9_]+\.sql)\s*$/im)?.[1];
+    const sql = shared ? await fs.readFile(path.resolve(tenantMigrationsRoot, '../drizzle', shared), 'utf8') : source;
     const sha256 = crypto.createHash('sha256').update(sql).digest('hex');
     const existing = (await pool.query(
       'select sha256 from bimik_tenant_migrations where filename=$1',

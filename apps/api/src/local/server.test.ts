@@ -19,6 +19,10 @@ async function fixture() {
   const paths = ensureLocalPaths(resolveLocalPaths({ BIMIK_DATA_DIR: root }));
   const db = openLocalDatabase(paths);
   const timestamp = new Date().toISOString();
+  // The fixture creates tenant-owned records directly, so seed the owning
+  // business and branch before the users/products that reference them.
+  db.prepare("INSERT INTO businesses(id,name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,created_at,updated_at) VALUES(1,'Bimik Cafe','bimik-cafe','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?)").run(timestamp, timestamp);
+  db.prepare("INSERT INTO branches(id,business_id,name,code,active,created_at,updated_at) VALUES(1,1,'Principal','MAIN',1,?,?)").run(timestamp, timestamp);
   const password = await bcrypt.hash("1", 4);
   db.prepare("INSERT INTO users(name,email,password,role,is_active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)").run("Patron Test", "patron@test.invalid", password, "patron", timestamp, timestamp);
   db.prepare("INSERT INTO users(name,email,password,role,is_active,created_at,updated_at) VALUES(?,?,?,?,0,?,?)").run("Inactif", "off@test.invalid", password, "worker", timestamp, timestamp);
@@ -143,6 +147,48 @@ test('cash register remains locally operational while hosted sync is unavailable
     assert.equal(applied.statusCode,200,applied.body);
     assert.equal(Number(context.db.prepare('select count(*) n from cash_register_sessions').get()?.n),2);
     assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status='pending'").get()?.n),1);
+  } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
+test('cash sync apply is monotonic and never feeds remotely applied state into the local outbox', async () => {
+  const context=await fixture();
+  try {
+    const openedAt='2026-09-22T10:00:00.000Z',closedAt='2026-09-22T10:01:00.000Z';
+    const stamp=new Date().toISOString(),vendorBusinessId=crypto.randomUUID();
+    const result=context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Sync','sync-monotonic','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(vendorBusinessId,stamp,stamp);
+    const businessId=Number(result.lastInsertRowid),branchId=Number(context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,stamp,stamp).lastInsertRowid);
+    context.db.prepare('update users set business_id=?,branch_id=? where id=1').run(businessId,branchId);
+    const remoteOpen={id:44,branch_code:'MAIN',business_date:'2026-09-22',status:'open',opened_at:openedAt,opening_cash:10,opening_note:null,closed_at:null,actual_cash:null,closing_note:null,updated_at:openedAt};
+    const first=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${openedAt}|44`,sessions:[remoteOpen]}});
+    assert.equal(first.statusCode,200,first.body);
+    const remoteClosed={...remoteOpen,status:'closed',closed_at:closedAt,actual_cash:10,updated_at:closedAt};
+    const second=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${closedAt}|44`,sessions:[remoteClosed]}});
+    assert.equal(second.statusCode,200,second.body);
+    const stale=await context.app.inject({method:'POST',url:'/api/sync/cash-register/apply-v2',headers:context.auth,payload:{cursor:`${openedAt}|44`,sessions:[remoteOpen]}});
+    assert.equal(stale.statusCode,200,stale.body);
+    assert.equal(context.db.prepare('select status from cash_register_sessions where server_id=44').get()?.status,'closed');
+    assert.equal(context.db.prepare("select value from sync_state where key='cash_register_cursor'").get()?.value,`${closedAt}|44`);
+    assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status in ('pending','failed')").get()?.n),0);
+  } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
+test('master data remote apply is transactional, monotonic, and does not requeue pulled rows', async () => {
+  const context=await fixture();
+  try {
+    const boot=new Date().toISOString(),vendorBusinessId=String(context.db.prepare("select vendor_business_id from merchant_license_state where id=1").get()?.vendor_business_id),businessId=Number(context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Master','master','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(vendorBusinessId,boot,boot).lastInsertRowid),branchId=Number(context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,boot,boot).lastInsertRowid);
+    context.db.prepare('update users set business_id=?,branch_id=? where id=1').run(businessId,branchId);
+    context.db.prepare("update sync_mutations set sync_status='synced'").run();
+    const stamp='2026-09-22T10:00:00.000Z',categorySync=crypto.randomUUID();
+    const applied=await context.app.inject({method:'POST',url:'/api/sync/master-data/apply',headers:context.auth,payload:{cursor:`${stamp}|12`,changes:[{entity_type:'categories',sync_id:categorySync,server_id:12,deleted:false,updated_at:stamp,data:{name:'Hosted category',image:null,is_public:true,created_at:stamp,updated_at:stamp}}]}});
+    assert.equal(applied.statusCode,200,applied.body);
+    assert.equal(context.db.prepare("select name from categories where name='Hosted category'").get()?.name,'Hosted category');
+    assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status in ('pending','failed')").get()?.n),0);
+    const local=await context.app.inject({method:'POST',url:'/api/categories',headers:context.auth,payload:{name:'Offline category',is_public:true}});
+    assert.equal(local.statusCode,200,local.body);
+    const outbox=await context.app.inject({method:'GET',url:'/api/sync/master-data/outbox',headers:context.auth});
+    assert.equal(outbox.statusCode,200,outbox.body);
+    assert.equal(outbox.json().data[0].payload.entity_type,'categories');
+    assert.match(outbox.json().data[0].payload.sync_id,/^[0-9a-f-]{36}$/);
   } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
 });
 

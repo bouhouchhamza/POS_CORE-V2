@@ -68,6 +68,10 @@ import { readCommercialLicenseState, resolveRuntimeBusinessIdentity } from './li
 import { ensureWebSessionDevice, mobileLoginProofPayload, registerSessionDevice, touchSessionDevice, verifySessionDeviceProof, type SessionDevice } from './license/session-devices.js';
 import { activationRequestIsFresh } from './license/policy.js';
 import { registerDesktopCashRegisterSync } from './sync/desktop-cash-register.js';
+import { registerDesktopMasterDataSync } from './sync/desktop-master-data.js';
+import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements.js';
+import { registerDesktopPurchaseSync } from './sync/desktop-purchases.js';
+import { registerDesktopSalesSync } from './sync/desktop-sales.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -123,6 +127,10 @@ await app.register(fastifyStatic, {
 
 await registerTenantRouting(app, controlPool);
 await registerDesktopCashRegisterSync(app,{pool,controlPool});
+await registerDesktopMasterDataSync(app,{pool,controlPool});
+await registerDesktopStockMovementSync(app,{pool,controlPool});
+await registerDesktopPurchaseSync(app,{pool,controlPool});
+await registerDesktopSalesSync(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,
@@ -886,6 +894,7 @@ async function changeStock(
         .insert(stockMovements)
         .values({
           businessId:u!.businessId,branchId:u!.branchId,
+          clientId:crypto.randomUUID(),
           productId: id,
           userId: req.user.sub,
           type: kind,
@@ -960,7 +969,8 @@ async function cashSessionDto(id:number,businessId:number) {
 }
 
 app.get("/api/cash-register/current",{preHandler:authenticate},async(req)=>{const u=await currentUser(req);
-  const [session]=await db.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),eq(cashRegisterSessions.status,"open"))).limit(1);
+  const branchCondition=u!.branchId===null?isNull(cashRegisterSessions.branchId):eq(cashRegisterSessions.branchId,u!.branchId);
+  const [session]=await db.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),branchCondition,eq(cashRegisterSessions.status,"open"))).limit(1);
   return {data:session?await cashSessionDto(session.id,u!.businessId):null};
 });
 app.post("/api/cash-register/open",{preHandler:cashManager},async(req,reply)=>{
@@ -985,7 +995,8 @@ app.post("/api/cash-register/close",{preHandler:cashManager},async(req,reply)=>{
   try{
     const input=cashRegisterCloseSchema.parse(req.body);
     const u=await currentUser(req);const id=await db.transaction(async(tx)=>{
-      const [session]=await tx.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),eq(cashRegisterSessions.status,"open"))).for("update").limit(1);
+      const branchCondition=u!.branchId===null?isNull(cashRegisterSessions.branchId):eq(cashRegisterSessions.branchId,u!.branchId);
+      const [session]=await tx.select().from(cashRegisterSessions).where(and(eq(cashRegisterSessions.businessId,u!.businessId),branchCondition,eq(cashRegisterSessions.status,"open"))).for("update").limit(1);
       if(!session)return null;
       const [totals]=await tx.select({cash:sql<string>`coalesce(sum(case when lower(${sales.paymentMethod}) in ('cash','espèces','especes') then ${sales.total} else 0 end),0)`})
         .from(sales).where(eq(sales.cashRegisterSessionId,session.id));

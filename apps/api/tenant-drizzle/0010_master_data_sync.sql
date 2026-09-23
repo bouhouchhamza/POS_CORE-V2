@@ -1,0 +1,2 @@
+-- Keep database-per-tenant runtimes on the same master-data sync contract.
+-- @corepos-shared-migration 0024_master_data_sync.sql
