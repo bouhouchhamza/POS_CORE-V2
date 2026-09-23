@@ -84,6 +84,18 @@ function applyPurchaseSyncIdentity(db:DatabaseSync){
   if(!itemColumns.has('stock_client_id'))db.exec('ALTER TABLE purchase_items ADD COLUMN stock_client_id TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS purchases_business_sync_id_unique ON purchases(business_id,sync_id) WHERE sync_id IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS purchases_business_server_id_unique ON purchases(business_id,server_id) WHERE server_id IS NOT NULL;');
 }
+function applyIdempotentAdditiveMigration(db:DatabaseSync,migrationSql:string){
+  const addColumn=/^\s*ALTER TABLE (\w+) ADD COLUMN (\w+) ([^;]+);\s*$/gm;
+  for(const match of migrationSql.matchAll(addColumn)){
+    const [,table,column,definition]=match;
+    const columns=new Set((db.prepare(`pragma table_info(${table})`).all() as {name:string}[]).map(row=>row.name));
+    if(!columns.has(column))db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+  const remainder=migrationSql.replace(addColumn,'')
+    .replace(/CREATE UNIQUE INDEX /g,'CREATE UNIQUE INDEX IF NOT EXISTS ')
+    .replace(/CREATE TRIGGER /g,'CREATE TRIGGER IF NOT EXISTS ');
+  if(remainder.trim())db.exec(remainder);
+}
 export function openLocalDatabase(paths:LocalPaths){
   ensureLocalPaths(paths);const existed=fs.existsSync(paths.database);const db=new DatabaseSync(paths.database);
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
@@ -102,6 +114,7 @@ export function openLocalDatabase(paths:LocalPaths){
           else if(migration.name==='master_data_sync_outbox')applyMasterDataSyncOutbox(db,migration.sql);
           else if(migration.name==='user_profile_sync')applyUserProfileSyncOutbox(db);
           else if(migration.name==='purchase_sync_outbox')applyPurchaseSyncIdentity(db);
+          else if(migration.name==='sales_return_sync_outbox'||migration.name==='order_restaurant_sync_outbox')applyIdempotentAdditiveMigration(db,migration.sql);
           else db.exec(migration.sql);
           if(requiresForeignKeysOff){
             const violations=db.prepare("PRAGMA foreign_key_check").all();

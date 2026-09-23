@@ -121,7 +121,7 @@ test('cash register remains locally operational while hosted sync is unavailable
   try {
     const stamp=new Date().toISOString();
     context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Offline first','offline-first','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(crypto.randomUUID(),stamp,stamp);
-    const businessId=Number(context.db.prepare('select id from businesses').get()?.id);
+    const businessId=Number(context.db.prepare("select id from businesses where slug='offline-first'").get()?.id);
     context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,stamp,stamp);
     context.db.prepare('update users set business_id=?,branch_id=1 where id=1').run(businessId);
     const opened=await context.app.inject({method:'POST',url:'/api/cash-register/open',headers:context.auth,payload:{opening_cash:20,opening_note:'Offline'}});
