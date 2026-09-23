@@ -70,6 +70,7 @@ import { activationRequestIsFresh } from './license/policy.js';
 import { registerDesktopCashRegisterSync } from './sync/desktop-cash-register.js';
 import { registerDesktopMasterDataSync } from './sync/desktop-master-data.js';
 import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements.js';
+import { registerDesktopPurchaseSync } from './sync/desktop-purchases.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -127,6 +128,7 @@ await registerTenantRouting(app, controlPool);
 await registerDesktopCashRegisterSync(app,{pool,controlPool});
 await registerDesktopMasterDataSync(app,{pool,controlPool});
 await registerDesktopStockMovementSync(app,{pool,controlPool});
+await registerDesktopPurchaseSync(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,

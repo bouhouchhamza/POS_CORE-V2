@@ -75,6 +75,15 @@ function applyUserProfileSyncOutbox(db:DatabaseSync){
       INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) SELECT OLD.business_id,${uuid},'users',OLD.id,'delete',json_object('entity_type','users','local_id',OLD.id,'sync_id',sync_id,'operation','delete'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM master_sync_entities WHERE entity_type='users' AND local_id=OLD.id;
     END;`);
 }
+function applyPurchaseSyncIdentity(db:DatabaseSync){
+  const purchaseColumns=new Set((db.prepare("pragma table_info(purchases)").all() as {name:string}[]).map(row=>row.name));
+  if(!purchaseColumns.has('sync_id'))db.exec('ALTER TABLE purchases ADD COLUMN sync_id TEXT');
+  if(!purchaseColumns.has('server_id'))db.exec('ALTER TABLE purchases ADD COLUMN server_id INTEGER');
+  if(!purchaseColumns.has('server_updated_at'))db.exec('ALTER TABLE purchases ADD COLUMN server_updated_at TEXT');
+  const itemColumns=new Set((db.prepare("pragma table_info(purchase_items)").all() as {name:string}[]).map(row=>row.name));
+  if(!itemColumns.has('stock_client_id'))db.exec('ALTER TABLE purchase_items ADD COLUMN stock_client_id TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS purchases_business_sync_id_unique ON purchases(business_id,sync_id) WHERE sync_id IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS purchases_business_server_id_unique ON purchases(business_id,server_id) WHERE server_id IS NOT NULL;');
+}
 export function openLocalDatabase(paths:LocalPaths){
   ensureLocalPaths(paths);const existed=fs.existsSync(paths.database);const db=new DatabaseSync(paths.database);
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
@@ -92,6 +101,7 @@ export function openLocalDatabase(paths:LocalPaths){
           if(migration.name==='cash_register_sync_identity')applyCashRegisterSyncIdentity(db);
           else if(migration.name==='master_data_sync_outbox')applyMasterDataSyncOutbox(db,migration.sql);
           else if(migration.name==='user_profile_sync')applyUserProfileSyncOutbox(db);
+          else if(migration.name==='purchase_sync_outbox')applyPurchaseSyncIdentity(db);
           else db.exec(migration.sql);
           if(requiresForeignKeysOff){
             const violations=db.prepare("PRAGMA foreign_key_check").all();

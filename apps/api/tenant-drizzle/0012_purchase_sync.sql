@@ -1,0 +1,1 @@
+-- @corepos-shared-migration 0026_purchase_sync.sql

@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 14;
+export const LOCAL_SCHEMA_VERSION = 17;
 
 export const localMigrations = [{
   version: 1,
@@ -351,5 +351,41 @@ export const localMigrations = [{
   version:14,
   name:'user_profile_sync',
   sql:'',
+}, {
+  version:15,
+  name:'purchase_sync_outbox',
+  sql:`
+    ALTER TABLE purchases ADD COLUMN sync_id TEXT;
+    ALTER TABLE purchases ADD COLUMN server_id INTEGER;
+    ALTER TABLE purchases ADD COLUMN server_updated_at TEXT;
+    ALTER TABLE purchase_items ADD COLUMN stock_client_id TEXT;
+    CREATE UNIQUE INDEX purchases_business_sync_id_unique ON purchases(business_id,sync_id) WHERE sync_id IS NOT NULL;
+    CREATE UNIQUE INDEX purchases_business_server_id_unique ON purchases(business_id,server_id) WHERE server_id IS NOT NULL;
+  `,
+}, {
+  version:16,
+  name:'stock_movement_sync_outbox',
+  sql:`
+    CREATE TRIGGER IF NOT EXISTS stock_movement_sync_outbox AFTER INSERT ON stock_movements
+      WHEN NEW.client_id IS NULL AND COALESCE((SELECT value FROM master_sync_runtime WHERE key='remote_apply'),'0')='0'
+    BEGIN
+      UPDATE stock_movements SET client_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
+        SELECT business_id,client_id,'stock_movement',CAST(id AS TEXT),'apply','{}','pending',created_at,updated_at FROM stock_movements WHERE id=NEW.id;
+    END;
+  `,
+}, {
+  version:17,
+  name:'stock_movement_sync_business_fallback',
+  sql:`
+    DROP TRIGGER IF EXISTS stock_movement_sync_outbox;
+    CREATE TRIGGER stock_movement_sync_outbox AFTER INSERT ON stock_movements
+      WHEN NEW.client_id IS NULL AND COALESCE((SELECT value FROM master_sync_runtime WHERE key='remote_apply'),'0')='0'
+    BEGIN
+      UPDATE stock_movements SET client_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
+        SELECT COALESCE(s.business_id,p.business_id),s.client_id,'stock_movement',CAST(s.id AS TEXT),'apply','{}','pending',s.created_at,s.updated_at FROM stock_movements s JOIN products p ON p.id=s.product_id WHERE s.id=NEW.id AND COALESCE(s.business_id,p.business_id) IS NOT NULL;
+    END;
+  `,
 }];
 

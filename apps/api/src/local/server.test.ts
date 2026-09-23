@@ -19,6 +19,10 @@ async function fixture() {
   const paths = ensureLocalPaths(resolveLocalPaths({ BIMIK_DATA_DIR: root }));
   const db = openLocalDatabase(paths);
   const timestamp = new Date().toISOString();
+  // The fixture creates tenant-owned records directly, so seed the owning
+  // business and branch before the users/products that reference them.
+  db.prepare("INSERT INTO businesses(id,name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,created_at,updated_at) VALUES(1,'Bimik Cafe','bimik-cafe','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?)").run(timestamp, timestamp);
+  db.prepare("INSERT INTO branches(id,business_id,name,code,active,created_at,updated_at) VALUES(1,1,'Principal','MAIN',1,?,?)").run(timestamp, timestamp);
   const password = await bcrypt.hash("1", 4);
   db.prepare("INSERT INTO users(name,email,password,role,is_active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)").run("Patron Test", "patron@test.invalid", password, "patron", timestamp, timestamp);
   db.prepare("INSERT INTO users(name,email,password,role,is_active,created_at,updated_at) VALUES(?,?,?,?,0,?,?)").run("Inactif", "off@test.invalid", password, "worker", timestamp, timestamp);
