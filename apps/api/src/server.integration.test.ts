@@ -228,7 +228,11 @@ test("sales group duplicates, snapshot price, update stock atomically, and roll 
 test("dashboard and stock resources match React/Laravel field contracts", { skip: !enabled }, async () => {
   const patronToken = await login();
   const workerToken = await login("worker@test.local");
-  const changed = await app.inject({ method: "POST", url: "/api/products/1/stock/decrease", headers: auth(workerToken), payload: { quantity: 2, note: "service" } });
+  const denied = await app.inject({ method: "POST", url: "/api/products/1/stock/decrease", headers: auth(workerToken), payload: { quantity: 2, note: "service" } });
+  assert.equal(denied.statusCode, 403, denied.body);
+  await pool.query("update users set role='stock_manager',business_id=1,branch_id=1 where email='worker@test.local'");
+  const stockManagerToken = await login("worker@test.local");
+  const changed = await app.inject({ method: "POST", url: "/api/products/1/stock/decrease", headers: auth(stockManagerToken), payload: { quantity: 2, note: "service" } });
   assert.equal(changed.statusCode, 200, changed.body);
   assert.equal(changed.json().product.stock, 8);
   assert.equal(changed.json().movement.before_stock, 10);
@@ -451,6 +455,69 @@ test("settings cast booleans/numbers and Wi-Fi update remains scoped", { skip: !
   const wifi = await app.inject({ method: "PUT", url: "/api/settings/wifi", headers: auth(patronToken), payload: { wifi_name: "Cafe WiFi", wifi_code: "123" } });
   assert.equal(wifi.statusCode, 200, wifi.body);
   assert.deepEqual(wifi.json(), { wifi_name: "Cafe WiFi", wifi_code: "123" });
+});
+
+test("Core V2 branch guards keep kitchen mutation scoped and pay cross-branch orders with the order branch", { skip: !enabled }, async () => {
+  const ownerToken = await login();
+  const hash = await bcrypt.hash("1", 4);
+  await pool.query("update users set business_id=1,branch_id=1 where id=1");
+  const branchB = (await pool.query("insert into branches(business_id,name,code) values(1,'Branch B','BRANCH_B') returning id")).rows[0];
+  const kitchenA = (await pool.query("insert into users(business_id,branch_id,name,email,password,role,is_active) values(1,1,'Kitchen A','kitchen-a@test.local',$1,'kitchen',true) returning id", [hash])).rows[0];
+  const kitchenB = (await pool.query("insert into users(business_id,branch_id,name,email,password,role,is_active) values(1,$1,'Kitchen B','kitchen-b@test.local',$2,'kitchen',true) returning id", [branchB.id, hash])).rows[0];
+  const kitchenOrder = (await pool.query("insert into orders(business_id,branch_id,client_id,order_number,source,type,user_id,status,subtotal,discount,tax,total,payment_status,sync_status) values(1,$1,$2,'KITCHEN-B','pos','dine_in',1,'pending',5,0,0,5,'unpaid','synced') returning id", [branchB.id, crypto.randomUUID()])).rows[0];
+  const kitchenItem = (await pool.query("insert into order_items(order_id,product_id,quantity,unit_price,discount,tax,total,preparation_status) values($1,1,1,5,0,0,5,'pending') returning id", [kitchenOrder.id])).rows[0];
+  const sameBranch = await app.inject({ method: "PATCH", url: `/api/kitchen/items/${kitchenItem.id}`, headers: auth(await login("kitchen-b@test.local")), payload: { status: "preparing" } });
+  assert.equal(sameBranch.statusCode, 200, sameBranch.body);
+  const otherBranch = await app.inject({ method: "PATCH", url: `/api/kitchen/items/${kitchenItem.id}`, headers: auth(await login("kitchen-a@test.local")), payload: { status: "ready" } });
+  assert.equal(otherBranch.statusCode, 404, otherBranch.body);
+  assert.ok(kitchenA.id && kitchenB.id);
+
+  const sessionB = (await pool.query("insert into cash_register_sessions(business_id,branch_id,business_date,status,opened_by_user_id,opening_cash) values(1,$1,current_date,'open',1,0) returning id", [branchB.id])).rows[0];
+  const payable = (await pool.query("insert into orders(business_id,branch_id,client_id,order_number,source,type,user_id,status,subtotal,discount,tax,total,payment_status,sync_status) values(1,$1,$2,'PAY-B','pos','retail',1,'pending',12,0,0,12,'unpaid','synced') returning id", [branchB.id, crypto.randomUUID()])).rows[0];
+  await pool.query("insert into order_items(order_id,product_id,quantity,unit_price,discount,tax,total) values($1,1,1,12,0,0,12)", [payable.id]);
+  const paid = await app.inject({ method: "POST", url: `/api/orders/${payable.id}/pay`, headers: auth(ownerToken), payload: { payment_method: "cash" } });
+  assert.equal(paid.statusCode, 200, paid.body);
+  assert.deepEqual((await pool.query("select branch_id,user_id,cash_register_session_id from sales where order_id=$1", [payable.id])).rows[0], { branch_id: branchB.id, user_id: 1, cash_register_session_id: sessionB.id });
+
+  const productB = (await pool.query("insert into products(business_id,category_id,name,purchase_price,sale_price,stock,min_stock) values(1,1,'Variant B',0,2,10,0) returning id")).rows[0];
+  const variantB = (await pool.query("insert into product_variants(business_id,product_id,name,active) values(1,$1,'Only B',true) returning id", [productB.id])).rows[0];
+  const invalidVariant = await app.inject({ method: "POST", url: "/api/orders", headers: auth(ownerToken), payload: { client_id: crypto.randomUUID(), source: "pos", type: "retail", discount: 0, tax: 0, payment_status: "unpaid", items: [{ product_id: 1, variant_id: variantB.id, quantity: 1, modifier_ids: [], discount: 0, tax: 0 }] } });
+  assert.equal(invalidVariant.statusCode, 422, invalidVariant.body);
+});
+
+test("cash and card refunds net revenue while only cash refunds change the drawer", { skip: !enabled }, async () => {
+  const ownerToken = await login();
+  await pool.query("delete from cash_register_sessions");
+  await pool.query("update users set business_id=1,branch_id=1 where id=1; update products set sale_price=100,stock=10,track_stock=true where id=1");
+  const opened = await app.inject({ method: "POST", url: "/api/cash-register/open", headers: auth(ownerToken), payload: { opening_cash: 0 } });
+  assert.equal(opened.statusCode, 201, opened.body);
+  const cashSale = await app.inject({ method: "POST", url: "/api/sales", headers: auth(ownerToken), payload: { payment_method: "cash", items: [{ product_id: 1, quantity: 1 }] } });
+  assert.equal(cashSale.statusCode, 201, cashSale.body);
+  const cashReturn = await app.inject({ method: "POST", url: `/api/sales/${cashSale.json().data.id}/returns`, headers: auth(ownerToken), payload: { reason: "Cash refund", refund_method: "cash", items: [{ sale_item_id: cashSale.json().data.items[0].id, quantity: 1 }] } });
+  assert.equal(cashReturn.statusCode, 201, cashReturn.body);
+  let current = (await app.inject({ method: "GET", url: "/api/cash-register/current", headers: auth(ownerToken) })).json().data;
+  assert.equal(current.sales_total, 0);
+  assert.equal(current.expected_cash, 0);
+  const cardSale = await app.inject({ method: "POST", url: "/api/sales", headers: auth(ownerToken), payload: { payment_method: "card", items: [{ product_id: 1, quantity: 1 }] } });
+  assert.equal(cardSale.statusCode, 201, cardSale.body);
+  const cardReturn = await app.inject({ method: "POST", url: `/api/sales/${cardSale.json().data.id}/returns`, headers: auth(ownerToken), payload: { reason: "Card refund", refund_method: "card", items: [{ sale_item_id: cardSale.json().data.items[0].id, quantity: 1 }] } });
+  assert.equal(cardReturn.statusCode, 201, cardReturn.body);
+  current = (await app.inject({ method: "GET", url: "/api/cash-register/current", headers: auth(ownerToken) })).json().data;
+  assert.equal(current.sales_total, 0);
+  assert.equal(current.expected_cash, 0);
+});
+
+test("monthly reports attribute refunds to the refund date", { skip: !enabled }, async () => {
+  const ownerToken = await login();
+  await pool.query("update users set business_id=1,branch_id=1 where id=1");
+  const sale = (await pool.query("insert into sales(business_id,branch_id,user_id,payment_method,total,profit,created_at,updated_at) values(1,1,1,'card',100,100,'2026-08-01T12:00:00Z','2026-08-01T12:00:00Z') returning id")).rows[0];
+  await pool.query("insert into sale_returns(business_id,branch_id,sale_id,user_id,reason,refund_method,total,created_at,sync_updated_at) values(1,1,$1,1,'Later refund','card',100,'2026-09-02T12:00:00Z','2026-09-02T12:00:00Z')", [sale.id]);
+  const dayOneMonth = await app.inject({ method: "GET", url: "/api/reports/monthly?month=2026-08", headers: auth(ownerToken) });
+  const refundMonth = await app.inject({ method: "GET", url: "/api/reports/monthly?month=2026-09", headers: auth(ownerToken) });
+  assert.equal(dayOneMonth.statusCode, 200, dayOneMonth.body);
+  assert.equal(refundMonth.statusCode, 200, refundMonth.body);
+  assert.equal(dayOneMonth.json().total_sales, 100);
+  assert.equal(refundMonth.json().total_sales, -100);
 });
 
 function cookieByName(value:string|string[]|undefined,name:string){const cookie=(Array.isArray(value)?value:[value??""]).find(item=>item.startsWith(`${name}=`))?.split(";")[0];assert.ok(cookie,`${name} cookie missing`);return cookie}
