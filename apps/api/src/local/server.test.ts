@@ -168,6 +168,26 @@ test('cash sync apply is monotonic and never feeds remotely applied state into t
   } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
 });
 
+test('master data remote apply is transactional, monotonic, and does not requeue pulled rows', async () => {
+  const context=await fixture();
+  try {
+    const boot=new Date().toISOString(),vendorBusinessId=String(context.db.prepare("select vendor_business_id from merchant_license_state where id=1").get()?.vendor_business_id),businessId=Number(context.db.prepare("insert into businesses(name,slug,business_type,currency,locale,timezone,tax_settings_json,receipt_settings_json,vendor_business_id,created_at,updated_at) values('Master','master','cafe','MAD','fr-MA','Africa/Casablanca','{}','{}',?,?,?)").run(vendorBusinessId,boot,boot).lastInsertRowid),branchId=Number(context.db.prepare("insert into branches(business_id,name,code,active,created_at,updated_at) values(?,'Main','MAIN',1,?,?)").run(businessId,boot,boot).lastInsertRowid);
+    context.db.prepare('update users set business_id=?,branch_id=? where id=1').run(businessId,branchId);
+    context.db.prepare("update sync_mutations set sync_status='synced'").run();
+    const stamp='2026-09-22T10:00:00.000Z',categorySync=crypto.randomUUID();
+    const applied=await context.app.inject({method:'POST',url:'/api/sync/master-data/apply',headers:context.auth,payload:{cursor:`${stamp}|12`,changes:[{entity_type:'categories',sync_id:categorySync,server_id:12,deleted:false,updated_at:stamp,data:{name:'Hosted category',image:null,is_public:true,created_at:stamp,updated_at:stamp}}]}});
+    assert.equal(applied.statusCode,200,applied.body);
+    assert.equal(context.db.prepare("select name from categories where name='Hosted category'").get()?.name,'Hosted category');
+    assert.equal(Number(context.db.prepare("select count(*) n from sync_mutations where sync_status in ('pending','failed')").get()?.n),0);
+    const local=await context.app.inject({method:'POST',url:'/api/categories',headers:context.auth,payload:{name:'Offline category',is_public:true}});
+    assert.equal(local.statusCode,200,local.body);
+    const outbox=await context.app.inject({method:'GET',url:'/api/sync/master-data/outbox',headers:context.auth});
+    assert.equal(outbox.statusCode,200,outbox.body);
+    assert.equal(outbox.json().data[0].payload.entity_type,'categories');
+    assert.match(outbox.json().data[0].payload.sync_id,/^[0-9a-f-]{36}$/);
+  } finally {await context.app.close();context.db.close();fs.rmSync(context.root,{recursive:true,force:true})}
+});
+
 test("legacy commercial state is fail-closed until Vendor activation", async () => {
   const context = await fixture();
 

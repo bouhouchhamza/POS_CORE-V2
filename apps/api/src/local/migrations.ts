@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 12;
+export const LOCAL_SCHEMA_VERSION = 13;
 
 export const localMigrations = [{
   version: 1,
@@ -324,6 +324,28 @@ export const localMigrations = [{
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+  `,
+}, {
+  version:13,
+  name:'master_data_sync_outbox',
+  sql:`
+    CREATE TABLE units(id INTEGER PRIMARY KEY AUTOINCREMENT,business_id INTEGER REFERENCES businesses(id),code TEXT NOT NULL,name TEXT NOT NULL,precision INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(business_id,code));
+    CREATE TABLE master_sync_entities(entity_type TEXT NOT NULL,local_id INTEGER NOT NULL,sync_id TEXT NOT NULL,server_id INTEGER,server_updated_at TEXT,sync_status TEXT NOT NULL DEFAULT 'pending',tombstoned INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(entity_type,local_id),UNIQUE(sync_id));
+    CREATE TABLE master_sync_runtime(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    INSERT INTO master_sync_runtime(key,value) VALUES('remote_apply','0');
+
+    CREATE TRIGGER master_sync_branches_insert AFTER INSERT ON branches WHEN (SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=NEW.business_id)) BEGIN
+      INSERT OR IGNORE INTO master_sync_entities(entity_type,local_id,sync_id) VALUES('branches',NEW.id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))));
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) VALUES(NEW.business_id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),'branches',NEW.id,'upsert',json_object('entity_type','branches','local_id',NEW.id,'sync_id',(SELECT sync_id FROM master_sync_entities WHERE entity_type='branches' AND local_id=NEW.id),'operation','upsert'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+    END;
+    CREATE TRIGGER master_sync_branches_update AFTER UPDATE ON branches WHEN (SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=NEW.business_id)) BEGIN
+      INSERT OR IGNORE INTO master_sync_entities(entity_type,local_id,sync_id) VALUES('branches',NEW.id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))));
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) VALUES(NEW.business_id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),'branches',NEW.id,'upsert',json_object('entity_type','branches','local_id',NEW.id,'sync_id',(SELECT sync_id FROM master_sync_entities WHERE entity_type='branches' AND local_id=NEW.id),'operation','upsert'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+    END;
+    CREATE TRIGGER master_sync_branches_delete AFTER DELETE ON branches WHEN (SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=OLD.business_id)) BEGIN
+      UPDATE master_sync_entities SET tombstoned=1,sync_status='pending' WHERE entity_type='branches' AND local_id=OLD.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) SELECT OLD.business_id,lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),'branches',OLD.id,'delete',json_object('entity_type','branches','local_id',OLD.id,'sync_id',sync_id,'operation','delete'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM master_sync_entities WHERE entity_type='branches' AND local_id=OLD.id;
+    END;
   `,
 }];
 

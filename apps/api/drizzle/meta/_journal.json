@@ -169,6 +169,13 @@
       "when": 1790035320000,
       "tag": "0023_cash_register_open_branch_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790121600000,
+      "tag": "0024_master_data_sync",
+      "breakpoints": true
     }
   ]
 }

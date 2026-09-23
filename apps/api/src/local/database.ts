@@ -45,6 +45,23 @@ function applyCashRegisterSyncIdentity(db:DatabaseSync){
   if(!columns.has('sync_status'))db.exec("ALTER TABLE cash_register_sessions ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'local' CHECK(sync_status IN ('local','pending','synced','conflict'))");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS cash_register_client_id_unique ON cash_register_sessions(business_id,client_id) WHERE client_id IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS cash_register_server_id_unique ON cash_register_sessions(business_id,server_id) WHERE server_id IS NOT NULL; DROP INDEX IF EXISTS cash_register_one_open_idx; CREATE UNIQUE INDEX cash_register_one_open_idx ON cash_register_sessions(business_id,branch_id) WHERE status='open' AND sync_status!='conflict'; CREATE TABLE IF NOT EXISTS sync_state(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)");
 }
+function applyMasterDataSyncOutbox(db:DatabaseSync,migrationSql:string){
+  db.exec(migrationSql.replace(/CREATE TABLE (units|master_sync_entities|master_sync_runtime)/g,'CREATE TABLE IF NOT EXISTS $1').replace('INSERT INTO master_sync_runtime','INSERT OR IGNORE INTO master_sync_runtime').replace(/CREATE TRIGGER /g,'CREATE TRIGGER IF NOT EXISTS '));
+  const entities=[['settings','settings'],['categories','categories'],['units','units'],['products','products'],['product_variants','product_variants'],['product_modifiers','product_modifiers'],['customers','customers'],['suppliers','suppliers']] as const;
+  const uuid="lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6)))";
+  for(const [entity,table] of entities){
+    const ensure=`INSERT OR IGNORE INTO master_sync_entities(entity_type,local_id,sync_id) VALUES('${entity}',NEW.id,${uuid});`;
+    const queue=`INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) VALUES(coalesce(NEW.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1)),${uuid},'${entity}',NEW.id,'upsert',json_object('entity_type','${entity}','local_id',NEW.id,'sync_id',(SELECT sync_id FROM master_sync_entities WHERE entity_type='${entity}' AND local_id=NEW.id),'operation','upsert'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));`;
+    const active=`(SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND coalesce(NEW.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1)) IS NOT NULL AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=coalesce(NEW.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1))))`;
+    const activeDelete=`(SELECT value FROM master_sync_runtime WHERE key='remote_apply')='0' AND coalesce(OLD.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1)) IS NOT NULL AND EXISTS(SELECT 1 FROM merchant_license_state l WHERE l.status='active' AND l.vendor_business_id=(SELECT vendor_business_id FROM businesses WHERE id=coalesce(OLD.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1))))`;
+    db.exec(`CREATE TRIGGER IF NOT EXISTS master_sync_${entity}_insert AFTER INSERT ON ${table} WHEN ${active} BEGIN ${ensure}${queue} END;
+      CREATE TRIGGER IF NOT EXISTS master_sync_${entity}_update AFTER UPDATE ON ${table} WHEN ${active} BEGIN ${ensure}${queue} END;
+      CREATE TRIGGER IF NOT EXISTS master_sync_${entity}_delete AFTER DELETE ON ${table} WHEN ${activeDelete} BEGIN
+        UPDATE master_sync_entities SET tombstoned=1,sync_status='pending' WHERE entity_type='${entity}' AND local_id=OLD.id;
+        INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at) SELECT coalesce(OLD.business_id,(SELECT id FROM businesses ORDER BY id LIMIT 1)),${uuid},'${entity}',OLD.id,'delete',json_object('entity_type','${entity}','local_id',OLD.id,'sync_id',sync_id,'operation','delete'),'pending',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM master_sync_entities WHERE entity_type='${entity}' AND local_id=OLD.id;
+      END;`);
+  }
+}
 export function openLocalDatabase(paths:LocalPaths){
   ensureLocalPaths(paths);const existed=fs.existsSync(paths.database);const db=new DatabaseSync(paths.database);
   db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
@@ -59,7 +76,9 @@ export function openLocalDatabase(paths:LocalPaths){
       try{
         db.exec("BEGIN IMMEDIATE");
         try{
-          if(migration.name==='cash_register_sync_identity')applyCashRegisterSyncIdentity(db);else db.exec(migration.sql);
+          if(migration.name==='cash_register_sync_identity')applyCashRegisterSyncIdentity(db);
+          else if(migration.name==='master_data_sync_outbox')applyMasterDataSyncOutbox(db,migration.sql);
+          else db.exec(migration.sql);
           if(requiresForeignKeysOff){
             const violations=db.prepare("PRAGMA foreign_key_check").all();
             if(violations.length)throw new Error("La migration des r?les utilisateurs a cr?? des r?f?rences SQLite invalides.");
