@@ -11,6 +11,7 @@ import {readLocalCertificate as storedCertificate} from '../license/local-certif
 import {registerLocalMasterDataSync} from '../local/master-data-sync.js';
 import {registerLocalStockMovementSync} from '../local/stock-movement-sync.js';
 import {registerLocalPurchaseSync} from '../local/purchase-sync.js';
+import {registerLocalSalesSync} from '../local/sales-sync.js';
 
 const now=()=>new Date().toISOString(),hash=(v:string)=>crypto.createHash('sha256').update(v).digest('hex'),cents=(v:number)=>Math.round(v*100),amount=(v:unknown)=>Number(v??0)/100;
 const one=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).get(...args) as any;
@@ -507,8 +508,9 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
   registerLocalMasterDataSync(app,db,guard(),user,tx);
   registerLocalStockMovementSync(app,db,guard(),user,tx);
   registerLocalPurchaseSync(app,db,guard(),user,tx);
+  registerLocalSalesSync(app,db,guard(),user,tx);
   app.get('/api/sync/status',{preHandler:guard()},async r=>({data:one(db,"select max(updated_at) last_sync_at,count(*) filter(where sync_status in('failed','conflict')) failed_count from sync_mutations where business_id=?",user(r).business_id)}));
-  app.get('/api/sync/outbox',{preHandler:guard()},async r=>({data:all(db,"select * from sync_mutations where business_id=? and entity_type not in ('branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers','users','stock_movement') and sync_status in('pending','failed') order by id limit 100",user(r).business_id).map(x=>({...x,payload:JSON.parse(x.payload_json)}))}));
+  app.get('/api/sync/outbox',{preHandler:guard()},async r=>({data:all(db,"select * from sync_mutations where business_id=? and entity_type not in ('branches','settings','categories','units','products','product_variants','product_modifiers','customers','suppliers','users','stock_movement','sale','sale_return') and sync_status in('pending','failed') order by id limit 100",user(r).business_id).map(x=>({...x,payload:JSON.parse(x.payload_json)}))}));
   app.post('/api/sync/outbox/:clientId/ack',{preHandler:guard()},async r=>{const u=user(r);db.prepare("update sync_mutations set sync_status='synced',last_error=null,updated_at=? where business_id=? and client_id=?").run(now(),u.business_id,(r.params as any).clientId);return {message:'Acknowledged.'}});
   app.post('/api/sync/outbox/:clientId/retry',{preHandler:guard()},async r=>{const u=user(r);db.prepare("update sync_mutations set sync_status='pending',last_error=null,updated_at=? where business_id=? and client_id=?").run(now(),u.business_id,(r.params as any).clientId);return {message:'Queued.'}});
   // The browser orchestrator can only request this safe public endpoint; the

@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 17;
+export const LOCAL_SCHEMA_VERSION = 18;
 
 export const localMigrations = [{
   version: 1,
@@ -385,6 +385,33 @@ export const localMigrations = [{
       UPDATE stock_movements SET client_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id;
       INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
         SELECT COALESCE(s.business_id,p.business_id),s.client_id,'stock_movement',CAST(s.id AS TEXT),'apply','{}','pending',s.created_at,s.updated_at FROM stock_movements s JOIN products p ON p.id=s.product_id WHERE s.id=NEW.id AND COALESCE(s.business_id,p.business_id) IS NOT NULL;
+    END;
+  `,
+}, {
+  version:18,
+  name:'sales_return_sync_outbox',
+  sql:`
+    ALTER TABLE sales ADD COLUMN server_id INTEGER;
+    ALTER TABLE sales ADD COLUMN server_updated_at TEXT;
+    ALTER TABLE sale_returns ADD COLUMN client_id TEXT;
+    ALTER TABLE sale_returns ADD COLUMN server_id INTEGER;
+    ALTER TABLE sale_returns ADD COLUMN server_updated_at TEXT;
+    CREATE UNIQUE INDEX sales_business_server_id_unique ON sales(business_id,server_id) WHERE server_id IS NOT NULL;
+    CREATE UNIQUE INDEX sale_returns_business_client_unique ON sale_returns(business_id,client_id) WHERE client_id IS NOT NULL;
+    CREATE UNIQUE INDEX sale_returns_business_server_id_unique ON sale_returns(business_id,server_id) WHERE server_id IS NOT NULL;
+    CREATE TRIGGER sales_sync_outbox AFTER INSERT ON sales
+      WHEN NEW.client_id IS NULL AND COALESCE((SELECT value FROM master_sync_runtime WHERE key='remote_apply'),'0')='0'
+    BEGIN
+      UPDATE sales SET client_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
+        SELECT COALESCE(s.business_id,u.business_id),s.client_id,'sale',CAST(s.id AS TEXT),'create','{}','pending',s.created_at,s.updated_at FROM sales s JOIN users u ON u.id=s.user_id WHERE s.id=NEW.id AND COALESCE(s.business_id,u.business_id) IS NOT NULL;
+    END;
+    CREATE TRIGGER sale_returns_sync_outbox AFTER INSERT ON sale_returns
+      WHEN NEW.client_id IS NULL AND COALESCE((SELECT value FROM master_sync_runtime WHERE key='remote_apply'),'0')='0'
+    BEGIN
+      UPDATE sale_returns SET client_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))) WHERE id=NEW.id;
+      INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
+        SELECT COALESCE(r.business_id,s.business_id),r.client_id,'sale_return',r.id,'return','{}','pending',r.created_at,r.created_at FROM sale_returns r JOIN sales s ON s.id=r.sale_id WHERE r.id=NEW.id AND COALESCE(r.business_id,s.business_id) IS NOT NULL;
     END;
   `,
 }];
