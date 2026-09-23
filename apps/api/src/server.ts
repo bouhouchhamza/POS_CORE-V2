@@ -952,20 +952,26 @@ async function cashSessionDto(id:number,businessId:number) {
     cashTotal:sql<string>`coalesce(sum(case when lower(${sales.paymentMethod}) in ('cash','espèces','especes') then ${sales.total} else 0 end),0)`,
     orders:sql<number>`count(*)::int`,
   }).from(sales).where(and(eq(sales.cashRegisterSessionId,id),eq(sales.businessId,businessId)));
+  const allRefundRows=await db.execute(sql`select coalesce(sum(sr.total),0) total from sale_returns sr join sales ss on ss.id=sr.sale_id where sr.business_id=${businessId} and ss.cash_register_session_id=${id}`);
+  const cashRefundRows=await db.execute(sql`select coalesce(sum(sr.total),0) total from sale_returns sr join sales ss on ss.id=sr.sale_id where sr.business_id=${businessId} and ss.cash_register_session_id=${id} and (lower(sr.refund_method)='cash' or (lower(sr.refund_method)='original' and lower(ss.payment_method) in ('cash','esp�ces','especes')))`);
+  const refundByMethodRows=await db.execute(sql`select lower(case when lower(sr.refund_method)='original' then ss.payment_method else sr.refund_method end) method,coalesce(sum(sr.total),0) total from sale_returns sr join sales ss on ss.id=sr.sale_id where sr.business_id=${businessId} and ss.cash_register_session_id=${id} group by 1`);
+  const rowValue=(x:any)=>Number(x?.rows?.[0]?.total??x?.[0]?.total??0);
+  const allRefund=rowValue(allRefundRows),cashRefund=rowValue(cashRefundRows);
+  const refundByMethod=Object.fromEntries(((refundByMethodRows as any).rows??refundByMethodRows as unknown as any[]).map((x:any)=>[String(x.method).toLowerCase(),Number(x.total)]));
   const methods=await db.select({method:sales.paymentMethod,total:sql<string>`sum(${sales.total})`}).from(sales)
-    .where(and(eq(sales.cashRegisterSessionId,id),eq(sales.businessId,businessId),sql`lower(${sales.paymentMethod}) not in ('cash','espèces','especes')`)).groupBy(sales.paymentMethod);
+    .where(and(eq(sales.cashRegisterSessionId,id),eq(sales.businessId,businessId),sql`lower(${sales.paymentMethod}) not in ('cash','esp�ces','especes')`)).groupBy(sales.paymentMethod);
   const workerTotals=await db.select({userId:users.id,name:users.name,total:sql<string>`sum(${sales.total})`,orders:sql<number>`count(*)::int`})
     .from(sales).innerJoin(users,and(eq(sales.userId,users.id),eq(users.businessId,businessId)))
     .where(and(eq(sales.cashRegisterSessionId,id),eq(sales.businessId,businessId))).groupBy(users.id,users.name).orderBy(users.name);
   const [quantity]=await db.select({total:sql<number>`coalesce(sum(${saleItems.quantity}),0)::int`}).from(saleItems)
     .innerJoin(sales,and(eq(saleItems.saleId,sales.id),eq(sales.businessId,businessId))).where(eq(sales.cashRegisterSessionId,id));
-  const expected=Number(row.session.expectedCash??(Number(row.session.openingCash)+Number(totals.cashTotal)));
+  const expected=Number(row.session.expectedCash??(Number(row.session.openingCash)+Number(totals.cashTotal)-cashRefund));
   return {id:row.session.id,business_date:row.session.businessDate,status:row.session.status,opened_at:row.session.openedAt,
     opened_by:mapUser(row.opener),opening_cash:Number(row.session.openingCash),opening_note:row.session.openingNote,
     closed_at:row.session.closedAt,closed_by:closer?mapUser(closer):null,expected_cash:expected,
     actual_cash:row.session.actualCash===null?null:Number(row.session.actualCash),difference:row.session.difference===null?null:Number(row.session.difference),
-    closing_note:row.session.closingNote,sales_total:Number(totals.salesTotal),cash_sales_total:Number(totals.cashTotal),
-    non_cash_totals:Object.fromEntries(methods.map((method)=>[method.method,Number(method.total)])),total_orders:totals.orders,
+    closing_note:row.session.closingNote,sales_total:Number(totals.salesTotal)-allRefund,cash_sales_total:Number(totals.cashTotal)-cashRefund,
+    non_cash_totals:Object.fromEntries(methods.map((method)=>[method.method,Number(method.total)-Number(refundByMethod[String(method.method).toLowerCase()]??0)])),total_orders:totals.orders,
     total_products_sold:quantity.total,sales_by_worker:workerTotals.map((worker)=>({user_id:worker.userId,name:worker.name,total:Number(worker.total),orders:worker.orders})),
     provisional:row.session.status==="open"};
 }
@@ -1002,7 +1008,9 @@ app.post("/api/cash-register/close",{preHandler:cashManager},async(req,reply)=>{
       if(!session)return null;
       const [totals]=await tx.select({cash:sql<string>`coalesce(sum(case when lower(${sales.paymentMethod}) in ('cash','espèces','especes') then ${sales.total} else 0 end),0)`})
         .from(sales).where(eq(sales.cashRegisterSessionId,session.id));
-      const expectedCents=Math.round(Number(session.openingCash)*100)+Math.round(Number(totals.cash)*100);
+      const refundRows=await tx.execute(sql`select coalesce(sum(sr.total),0) total from sale_returns sr join sales ss on ss.id=sr.sale_id where ss.cash_register_session_id=${session.id} and (lower(sr.refund_method)='cash' or (lower(sr.refund_method)='original' and lower(ss.payment_method) in ('cash','espèces','especes')))`);
+      const refunds=(refundRows as any).rows?.[0]??(refundRows as any)[0]??{total:0};
+      const expectedCents=Math.round(Number(session.openingCash)*100)+Math.round(Number(totals.cash)*100)-Math.round(Number(refunds?.total??0)*100);
       const actualCents=Math.round(Number(input.actual_cash)*100);
       await tx.update(cashRegisterSessions).set({status:"closed",closedAt:new Date(),closedByUserId:req.user.sub,
         expectedCash:(expectedCents/100).toFixed(2),actualCash:(actualCents/100).toFixed(2),difference:((actualCents-expectedCents)/100).toFixed(2),
@@ -1029,12 +1037,12 @@ app.get("/api/cash-register/sessions/:id",{preHandler:patron},async(req,reply)=>
 });
 app.post(
   "/api/products/:id/stock/increase",
-  { preHandler: authenticate },
+  { preHandler: productManager },
   (req, reply) => changeStock(req, reply, "in"),
 );
 app.post(
   "/api/products/:id/stock/decrease",
-  { preHandler: authenticate },
+  { preHandler: productManager },
   (req, reply) => changeStock(req, reply, "out"),
 );
 app.post(
@@ -1212,11 +1220,13 @@ async function reportPayload(
     }
   }
 
+  const refundScope=sessionId?sql`s.cash_register_session_id=${sessionId}`:(start&&end?sql`r.created_at>=${start} and r.created_at<=${end}`:sql`false`);
+  const refundRows=await db.execute(sql`select coalesce(sum(r.total),0) total from sale_returns r join sales s on s.id=r.sale_id where r.business_id=${businessId} and ${refundScope}`);
+  const refunds=Number((refundRows as any).rows?.[0]?.total??(refundRows as any)[0]?.total??0);
+
   return {
     period,
-    total_sales: money(
-      rows.reduce((total, sale) => total + Number(sale.total), 0),
-    ),
+    total_sales: money(rows.reduce((total, sale) => total + Number(sale.total), 0)-refunds),
     total_orders: rows.length,
     total_products_sold: totalProductsSold,
     best_products: [...productTotals.values()].sort(
