@@ -1,0 +1,11 @@
+ALTER TABLE restaurant_tables ADD COLUMN IF NOT EXISTS client_id uuid;
+ALTER TABLE restaurant_tables ADD COLUMN IF NOT EXISTS sync_updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE table_events ADD COLUMN IF NOT EXISTS client_id uuid;
+ALTER TABLE table_events ADD COLUMN IF NOT EXISTS sync_updated_at timestamptz NOT NULL DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS restaurant_tables_business_client_unique ON restaurant_tables(business_id,client_id) WHERE client_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS table_events_business_client_unique ON table_events(business_id,client_id) WHERE client_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS orders_business_sync_cursor_idx ON orders(business_id,updated_at,id);
+CREATE INDEX IF NOT EXISTS table_events_business_sync_cursor_idx ON table_events(business_id,sync_updated_at,id);
+CREATE OR REPLACE FUNCTION corepos_touch_table_event_sync() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.sync_updated_at=clock_timestamp(); RETURN NEW; END $$;
+DROP TRIGGER IF EXISTS table_event_sync_touch ON table_events;
+CREATE TRIGGER table_event_sync_touch BEFORE UPDATE ON table_events FOR EACH ROW EXECUTE FUNCTION corepos_touch_table_event_sync();

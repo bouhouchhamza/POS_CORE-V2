@@ -72,6 +72,7 @@ import { registerDesktopMasterDataSync } from './sync/desktop-master-data.js';
 import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements.js';
 import { registerDesktopPurchaseSync } from './sync/desktop-purchases.js';
 import { registerDesktopSalesSync } from './sync/desktop-sales.js';
+import { registerDesktopOrderSync } from './sync/desktop-orders.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -131,6 +132,7 @@ await registerDesktopMasterDataSync(app,{pool,controlPool});
 await registerDesktopStockMovementSync(app,{pool,controlPool});
 await registerDesktopPurchaseSync(app,{pool,controlPool});
 await registerDesktopSalesSync(app,{pool,controlPool});
+await registerDesktopOrderSync(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,

@@ -1,4 +1,4 @@
-export const LOCAL_SCHEMA_VERSION = 18;
+export const LOCAL_SCHEMA_VERSION = 19;
 
 export const localMigrations = [{
   version: 1,
@@ -413,6 +413,27 @@ export const localMigrations = [{
       INSERT INTO sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload_json,sync_status,created_at,updated_at)
         SELECT COALESCE(r.business_id,s.business_id),r.client_id,'sale_return',r.id,'return','{}','pending',r.created_at,r.created_at FROM sale_returns r JOIN sales s ON s.id=r.sale_id WHERE r.id=NEW.id AND COALESCE(r.business_id,s.business_id) IS NOT NULL;
     END;
+  `,
+}, {
+  version:19,
+  name:'order_restaurant_sync_outbox',
+  sql:`
+    ALTER TABLE orders ADD COLUMN server_id INTEGER;
+    ALTER TABLE orders ADD COLUMN server_updated_at TEXT;
+    ALTER TABLE order_items ADD COLUMN server_id INTEGER;
+    ALTER TABLE order_items ADD COLUMN server_updated_at TEXT;
+    ALTER TABLE table_events ADD COLUMN client_id TEXT;
+    ALTER TABLE table_events ADD COLUMN server_id INTEGER;
+    ALTER TABLE table_events ADD COLUMN server_updated_at TEXT;
+    ALTER TABLE restaurant_tables ADD COLUMN client_id TEXT;
+    ALTER TABLE restaurant_tables ADD COLUMN server_id INTEGER;
+    ALTER TABLE restaurant_tables ADD COLUMN server_updated_at TEXT;
+    CREATE UNIQUE INDEX orders_business_server_id_unique ON orders(business_id,server_id) WHERE server_id IS NOT NULL;
+    CREATE UNIQUE INDEX order_items_order_server_id_unique ON order_items(order_id,server_id) WHERE server_id IS NOT NULL;
+    CREATE UNIQUE INDEX table_events_business_client_unique ON table_events(business_id,client_id) WHERE client_id IS NOT NULL;
+    CREATE UNIQUE INDEX table_events_business_server_unique ON table_events(business_id,server_id) WHERE server_id IS NOT NULL;
+    CREATE UNIQUE INDEX restaurant_tables_business_client_unique ON restaurant_tables(business_id,client_id) WHERE client_id IS NOT NULL;
+    CREATE UNIQUE INDEX restaurant_tables_business_server_unique ON restaurant_tables(business_id,server_id) WHERE server_id IS NOT NULL;
   `,
 }];
 
