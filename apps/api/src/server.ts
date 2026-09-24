@@ -74,6 +74,7 @@ import { registerDesktopStockMovementSync } from './sync/desktop-stock-movements
 import { registerDesktopPurchaseSync } from './sync/desktop-purchases.js';
 import { registerDesktopSalesSync } from './sync/desktop-sales.js';
 import { registerDesktopOrderSync } from './sync/desktop-orders.js';
+import { registerUniversalSyncV1 } from './sync/universal-v1.js';
 import { publishCashRegisterChanged, registerDesktopRealtime } from './sync/desktop-realtime.js';
 
 declare module "@fastify/jwt" {
@@ -137,6 +138,7 @@ await registerDesktopStockMovementSync(app,{pool,controlPool});
 await registerDesktopPurchaseSync(app,{pool,controlPool});
 await registerDesktopSalesSync(app,{pool,controlPool});
 await registerDesktopOrderSync(app,{pool,controlPool});
+await registerUniversalSyncV1(app,{pool,controlPool});
 
 const mapUser = (u: any) => ({
   id: u.id,

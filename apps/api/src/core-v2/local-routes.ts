@@ -13,6 +13,7 @@ import {registerLocalStockMovementSync} from '../local/stock-movement-sync.js';
 import {registerLocalPurchaseSync} from '../local/purchase-sync.js';
 import {registerLocalSalesSync} from '../local/sales-sync.js';
 import {registerLocalOrderSync} from '../local/order-sync.js';
+import {registerLocalUniversalV1Sync} from '../local/universal-v1-sync.js';
 
 const now=()=>new Date().toISOString(),hash=(v:string)=>crypto.createHash('sha256').update(v).digest('hex'),cents=(v:number)=>Math.round(v*100),amount=(v:unknown)=>Number(v??0)/100;
 const one=(db:DatabaseSync,sql:string,...args:any[])=>db.prepare(sql).get(...args) as any;
@@ -508,6 +509,7 @@ export function registerLocalCoreV2Routes(app:FastifyInstance,db:DatabaseSync,au
     return{data:{status:'active',certificate}};
   });
   registerLocalMasterDataSync(app,db,guard(),user,tx);
+  registerLocalUniversalV1Sync(app,db,guard(),user,tx);
   registerLocalStockMovementSync(app,db,guard(),user,tx);
   registerLocalPurchaseSync(app,db,guard(),user,tx);
   registerLocalSalesSync(app,db,guard(),user,tx);

@@ -11,7 +11,8 @@ export type DesktopRealtimeDependencies={
   available:()=>boolean
   credentials:()=>Promise<{url:string;message:unknown}|null>
   createSocket:(url:string)=>DesktopRealtimeSocket
-  reconcile:()=>Promise<boolean>
+  reconcileCash:()=>Promise<boolean>
+  reconcileMaster:()=>Promise<boolean>
   listenConnectivity:(online:()=>void,offline:()=>void)=>()=>void
   schedule:(callback:()=>void,delayMs:number)=>unknown
   cancel:(timer:unknown)=>void
@@ -21,18 +22,20 @@ export type DesktopRealtimeDependencies={
 
 export function createDesktopRealtimeClient(dependencies:DesktopRealtimeDependencies){
   let stopped=true,connecting=false,socket:DesktopRealtimeSocket|null=null,reconnectTimer:unknown=null,attempt=0,generation=0
-  let reconciling=false,reconcileAgain=false,removeConnectivity:(()=>void)|null=null
+  const reconciliation={cash:{active:false,again:false},master:{active:false,again:false}}
+  let removeConnectivity:(()=>void)|null=null
 
-  async function triggerReconciliation(){
-    if(reconciling){reconcileAgain=true;return}
-    reconciling=true
+  async function triggerReconciliation(scope:'cash'|'master'){
+    const state=reconciliation[scope]
+    if(state.active){state.again=true;return}
+    state.active=true
     try{
       do{
-        reconcileAgain=false
-        dependencies.log('reconciliation triggered')
-        await dependencies.reconcile().catch(()=>false)
-      }while(reconcileAgain&&!stopped)
-    }finally{reconciling=false}
+        state.again=false
+        dependencies.log(`${scope} reconciliation triggered`)
+        await (scope==='cash'?dependencies.reconcileCash():dependencies.reconcileMaster()).catch(()=>false)
+      }while(state.again&&!stopped)
+    }finally{state.active=false}
   }
 
   function clearReconnect(){if(reconnectTimer!==null){dependencies.cancel(reconnectTimer);reconnectTimer=null}}
@@ -64,10 +67,15 @@ export function createDesktopRealtimeClient(dependencies:DesktopRealtimeDependen
           authenticated=true
           attempt=0
           dependencies.log('realtime connected')
-          void triggerReconciliation()
+          void triggerReconciliation('cash')
         }else if(type==='cash_register_changed'&&authenticated){
           dependencies.log('cash event received')
-          void triggerReconciliation()
+          void triggerReconciliation('cash')
+        }else if(type==='sync_required'&&authenticated){
+          const scopes=(event as {scopes?:unknown}).scopes
+          if(!Array.isArray(scopes)||!scopes.includes('master'))return
+          dependencies.log('master sync event received')
+          void triggerReconciliation('master')
         }
       })
       current.onClose(()=>{

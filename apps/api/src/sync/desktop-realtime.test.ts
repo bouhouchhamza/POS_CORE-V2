@@ -3,7 +3,7 @@ import test from 'node:test'
 import Fastify from 'fastify'
 import websocket from '@fastify/websocket'
 import type {WebSocket} from 'ws'
-import {publishCashRegisterChanged,registerDesktopRealtime} from './desktop-realtime.js'
+import {publishCashRegisterChanged,publishSyncRequired,registerDesktopRealtime} from './desktop-realtime.js'
 
 type TestDevice={state?:'active'|'invalid'|'revoked'|'inactive';channel?:string}
 const authentication=(device:TestDevice={})=>JSON.stringify({type:'authenticate',device})
@@ -71,6 +71,18 @@ test('a Desktop receives only its server-authorized business channel',async()=>{
     const eventMessage=message(a),published=publishCashRegisterChanged('business-a'),received=await eventMessage
     await new Promise(resolve=>setTimeout(resolve,10))
     assert.deepEqual(received,published);assert.equal(bReceived,false)
+  }finally{await Promise.all([disconnect(a),disconnect(b)]);await app.close()}
+})
+
+test('sync_required contains only a master invalidation and stays inside its authorized channel',async()=>{
+  const app=await fixture(),a=await app.injectWS('/api/desktop-sync/realtime'),b=await app.injectWS('/api/desktop-sync/realtime')
+  try{
+    let ready=message(a);a.send(authentication({channel:'business-a'}));await ready
+    ready=message(b);b.send(authentication({channel:'business-b'}));await ready
+    let bReceived=false;b.once('message',()=>{bReceived=true})
+    const received=message(a),published=publishSyncRequired('business-a'),event=await received
+    await new Promise(resolve=>setTimeout(resolve,10))
+    assert.deepEqual(event,published);assert.equal(event.type,'sync_required');if(event.type==='sync_required')assert.deepEqual(event.scopes,['master']);assert.equal(bReceived,false);assert.equal('data' in event,false)
   }finally{await Promise.all([disconnect(a),disconnect(b)]);await app.close()}
 })
 

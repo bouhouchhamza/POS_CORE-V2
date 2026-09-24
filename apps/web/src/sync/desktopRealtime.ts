@@ -1,4 +1,5 @@
 import {desktopCashRealtimeCredentials,reconcileDesktopCashRegister} from './desktopCashRegister'
+import {reconcileDesktopUniversalV1} from './desktopUniversalV1'
 import {createDesktopRealtimeClient} from './desktopRealtimeCore'
 
 const desktop=()=>typeof window!=='undefined'&&'__TAURI_INTERNALS__' in window
@@ -21,7 +22,8 @@ function createClient(){return createDesktopRealtimeClient({
       close:()=>socket.close(),
     }
   },
-  reconcile:reconcileDesktopCashRegister,
+  reconcileCash:reconcileDesktopCashRegister,
+  reconcileMaster:reconcileDesktopUniversalV1,
   listenConnectivity:(online,offline)=>{window.addEventListener('online',online);window.addEventListener('offline',offline);return()=>{window.removeEventListener('online',online);window.removeEventListener('offline',offline)}},
   schedule:(callback,delay)=>window.setTimeout(callback,delay),
   cancel:timer=>window.clearTimeout(timer as number),

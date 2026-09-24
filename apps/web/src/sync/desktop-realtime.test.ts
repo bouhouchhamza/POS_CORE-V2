@@ -22,14 +22,15 @@ class FakeSocket implements DesktopRealtimeSocket{
 
 const tick=async()=>{await Promise.resolve();await Promise.resolve()}
 
-function harness(reconcile:()=>Promise<boolean>=async()=>true){
+function harness(reconcileCash:()=>Promise<boolean>=async()=>true,reconcileMaster:()=>Promise<boolean>=async()=>true){
   let online=true,onlineListener=()=>{},offlineListener=()=>{}
   const sockets:FakeSocket[]=[],timers:{callback:()=>void;delay:number;cancelled:boolean}[]=[],logs:string[]=[]
   const dependencies:DesktopRealtimeDependencies={
     available:()=>online,
     credentials:async()=>({url:'wss://hosted.test/api/desktop-sync/realtime',message:{type:'authenticate',device:{proof:'signed'}}}),
     createSocket:()=>{const socket=new FakeSocket();sockets.push(socket);return socket},
-    reconcile,
+    reconcileCash,
+    reconcileMaster,
     listenConnectivity:(onOnline,onOffline)=>{onlineListener=onOnline;offlineListener=onOffline;return()=>{onlineListener=()=>{};offlineListener=()=>{}}},
     schedule:(callback,delay)=>{const timer={callback,delay,cancelled:false};timers.push(timer);return timer},
     cancel:value=>{(value as {cancelled:boolean}).cancelled=true},
@@ -60,6 +61,17 @@ test('repeated cash events coalesce without concurrent reconciliation',async()=>
   const h=harness(()=>new Promise<boolean>(resolve=>{calls++;active++;maxActive=Math.max(maxActive,active);releases.push(()=>{active--;resolve(true)})})),client=createDesktopRealtimeClient(h.dependencies)
   client.start();await tick();h.sockets[0]!.open();h.sockets[0]!.message({type:'ready'});await tick()
   h.sockets[0]!.message({type:'cash_register_changed'});h.sockets[0]!.message({type:'cash_register_changed'});h.sockets[0]!.message({type:'cash_register_changed'})
+  assert.equal(calls,1);releases.shift()!();await tick();assert.equal(calls,2);releases.shift()!();await tick()
+  assert.equal(maxActive,1);assert.equal(calls,2)
+  client.stop()
+})
+
+test('sync_required master events invoke and coalesce Universal V1 reconciliation',async()=>{
+  let calls=0,active=0,maxActive=0
+  const releases:(()=>void)[]=[]
+  const h=harness(async()=>true,()=>new Promise<boolean>(resolve=>{calls++;active++;maxActive=Math.max(maxActive,active);releases.push(()=>{active--;resolve(true)})})),client=createDesktopRealtimeClient(h.dependencies)
+  client.start();await tick();h.sockets[0]!.open();h.sockets[0]!.message({type:'ready'});await tick()
+  h.sockets[0]!.message({type:'sync_required',scopes:['master']});h.sockets[0]!.message({type:'sync_required',scopes:['master']});h.sockets[0]!.message({type:'sync_required',scopes:['master']})
   assert.equal(calls,1);releases.shift()!();await tick();assert.equal(calls,2);releases.shift()!();await tick()
   assert.equal(maxActive,1);assert.equal(calls,2)
   client.stop()

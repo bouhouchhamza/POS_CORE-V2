@@ -3,7 +3,9 @@ import type {FastifyInstance} from 'fastify'
 import type {WebSocket} from 'ws'
 import {z} from 'zod'
 
-export type DesktopRealtimeEvent={type:'cash_register_changed';event_id:string;occurred_at:string}
+export type DesktopRealtimeEvent=
+  |{type:'cash_register_changed';event_id:string;occurred_at:string}
+  |{type:'sync_required';scopes:['master'];event_id:string;occurred_at:string}
 type RealtimeAuthorization={channelKey:string}
 type RealtimeOptions={authenticate:(device:unknown)=>Promise<RealtimeAuthorization>;authenticationTimeoutMs?:number;heartbeatIntervalMs?:number}
 
@@ -24,6 +26,19 @@ function closeReason(error:unknown){
 
 export function publishCashRegisterChanged(channelKey:string):DesktopRealtimeEvent{
   const event:DesktopRealtimeEvent={type:'cash_register_changed',event_id:crypto.randomUUID(),occurred_at:new Date().toISOString()}
+  const serialized=JSON.stringify(event)
+  for(const socket of subscribers.get(channelKey)??[]){
+    try{
+      if(socket.readyState===1)socket.send(serialized,error=>{if(error)socket.terminate()})
+      else remove(channelKey,socket)
+    }catch{socket.terminate();remove(channelKey,socket)}
+  }
+  return event
+}
+
+/** A non-authoritative invalidation. Desktop still pulls and validates all data. */
+export function publishSyncRequired(channelKey:string,scopes:['master']=['master']):DesktopRealtimeEvent{
+  const event:DesktopRealtimeEvent={type:'sync_required',scopes,event_id:crypto.randomUUID(),occurred_at:new Date().toISOString()}
   const serialized=JSON.stringify(event)
   for(const socket of subscribers.get(channelKey)??[]){
     try{

@@ -1,4 +1,5 @@
 import api,{unwrapData} from '../api/client'
+import {legacyMasterChanges,legacyMasterOutbox} from './masterDataOwnership'
 
 type Certificate={license_id:string;certificate_id:string;installation_id:string}
 type Identity={installation_id:string;public_key:string}
@@ -23,13 +24,13 @@ async function reconcile(){
     ])
     const certificate=status.certificate;if(!certificate||!identity||certificate.installation_id!==identity.installation_id)return false
     const base=config.server_url.replace(/\/$/,'')
-    for(const queued of outbox){
+    for(const queued of legacyMasterOutbox(outbox)){
       try{await response(`${base}/api/desktop-sync/master-data/push`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({device:await proof('push',certificate,identity,queued.payload),mutation:queued.payload}),signal:AbortSignal.timeout(8000)});await api.post(`/sync/outbox/${queued.client_id}/ack`)}
       catch(error){if((error as {status?:number}).status===409)await api.post('/sync/master-data/conflict',{client_id:queued.client_id});else return false}
     }
     const device=await proof('pull',certificate,identity),query=new URLSearchParams({...device,cursor:state.cursor??''})
     const pulled=await response(`${base}/api/desktop-sync/master-data/pull?${query}`,{headers:{accept:'application/json'},signal:AbortSignal.timeout(8000)})
-    await api.post('/sync/master-data/apply',{changes:pulled.changes??[],cursor:pulled.cursor??state.cursor})
+    await api.post('/sync/master-data/apply',{changes:legacyMasterChanges(pulled.changes??[]),cursor:pulled.cursor??state.cursor})
     window.dispatchEvent(new Event('master-data-synced'));return true
   }catch{return false}
 }
