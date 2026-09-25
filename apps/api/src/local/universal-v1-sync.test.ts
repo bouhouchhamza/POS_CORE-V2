@@ -50,6 +50,12 @@ test('Universal V1 keeps pilot mutations durable and rolls back a failed remote 
     assert.ok(failed.statusCode>=400,failed.body);
     assert.equal(db.prepare('select name from categories where id=?').get(localId).name,'Offline category');
     assert.equal(db.prepare("select value from sync_state where key='universal_v1_cursor'").get(),undefined);
+    const rawHosted=await app.inject({method:'POST',url:'/api/sync/v1/apply',headers:afterRestart,payload:{cursor,changes:[
+      {entity_type:'categories',sync_id:categorySync,server_id:41,deleted:false,updated_at:stamp,data:{name:'Raw hosted category',image:null,is_public:true,business_id:1,created_at:stamp,updated_at:stamp}},
+    ]}});
+    assert.ok(rawHosted.statusCode>=400,rawHosted.body);
+    assert.equal(db.prepare('select name from categories where id=?').get(localId).name,'Offline category');
+    assert.equal(db.prepare("select value from sync_state where key='universal_v1_cursor'").get(),undefined);
     const applied=await app.inject({method:'POST',url:'/api/sync/v1/apply',headers:afterRestart,payload:{cursor,changes:[
       {entity_type:'categories',sync_id:categorySync,server_id:41,deleted:false,updated_at:stamp,data:{name:'Remote category',image:null,is_public:true}},
       {entity_type:'units',sync_id:unitSync,server_id:42,deleted:false,updated_at:stamp,data:{code:'pc',name:'Piece',precision:0,active:true}},

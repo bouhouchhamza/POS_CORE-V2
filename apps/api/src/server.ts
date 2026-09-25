@@ -76,6 +76,7 @@ import { registerDesktopSalesSync } from './sync/desktop-sales.js';
 import { registerDesktopOrderSync } from './sync/desktop-orders.js';
 import { registerUniversalSyncV1 } from './sync/universal-v1.js';
 import { publishCashRegisterChanged, registerDesktopRealtime } from './sync/desktop-realtime.js';
+import {commitHostedMasterDataChange,deleteHostedCategory,insertHostedCategory,updateHostedCategory} from './sync/hosted-master-data.js';
 
 declare module "@fastify/jwt" {
   interface FastifyJWT {
@@ -735,8 +736,8 @@ app.post("/api/categories", { preHandler: patron }, async (req, reply) => {
   try {
     const parsed = await parseBodyWithImage(req, "categories");
     uploaded = parsed.image;
-    const v = categorySchema.parse(parsed.fields);const {is_public,...category}=v;
-    const u=await currentUser(req);const [c] = await db.insert(categories).values({ businessId:u!.businessId,...category,isPublic:is_public??true, image: uploaded ?? v.image }).returning();
+    const v = categorySchema.parse(parsed.fields);
+    const u=await currentUser(req);const result=await commitHostedMasterDataChange(pool,u!.businessId,client=>insertHostedCategory(client,u!.businessId,{name:v.name,image:uploaded??v.image??null,is_public:v.is_public??true}));const c=result.rows[0];
     return reply.code(201).send({ data: mapCategory(c) });
   } catch (e) {
     await removeManagedImage(uploaded);
@@ -751,12 +752,8 @@ async function updateCategory(req: FastifyRequest, reply: FastifyReply) {
     if (!old) return reply.code(404).send({ message: "Not found." });
     const parsed = await parseBodyWithImage(req, "categories");
     uploaded = parsed.image;
-    const v = categorySchema.parse(parsed.fields);const {is_public,...category}=v;
-    const [c] = await db
-      .update(categories)
-      .set({ ...category,isPublic:is_public??old.isPublic, image: uploaded ?? old.image, updatedAt: new Date() })
-      .where(and(eq(categories.id,id),eq(categories.businessId,u!.businessId)))
-      .returning();
+    const v = categorySchema.parse(parsed.fields);
+    const result=await commitHostedMasterDataChange(pool,u!.businessId,client=>updateHostedCategory(client,u!.businessId,id,{name:v.name,image:uploaded??old.image,is_public:v.is_public??old.isPublic}));const c=result.rows[0];
     if (uploaded) await removeManagedImage(old.image);
     return { data: mapCategory(c) };
   } catch (e) {
@@ -768,7 +765,7 @@ app.put("/api/categories/:id", { preHandler: patron }, updateCategory);
 app.post("/api/categories/:id", { preHandler: patron }, updateCategory);
 app.delete("/api/categories/:id", { preHandler: patron }, async (req) => {
   const id = idParam.parse((req.params as any).id);
-  const u=await currentUser(req);const [deleted] = await db.delete(categories).where(and(eq(categories.id,id),eq(categories.businessId,u!.businessId))).returning();
+  const u=await currentUser(req);const result=await commitHostedMasterDataChange(pool,u!.businessId,client=>deleteHostedCategory(client,u!.businessId,id));const deleted=result.rows[0];
   await removeManagedImage(deleted?.image);
   return { message: "Category deleted successfully." };
 });

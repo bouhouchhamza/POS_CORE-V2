@@ -1,4 +1,5 @@
 import api,{unwrapData} from '../api/client'
+import {logUniversalV1Failure,type UniversalV1DiagnosticContext} from './desktopUniversalV1Diagnostics'
 
 const pilot=new Set(['categories','units','customers'])
 const desktop=()=>typeof window!=='undefined'&&'__TAURI_INTERNALS__' in window
@@ -10,6 +11,7 @@ let active:Promise<boolean>|null=null
 
 async function reconcile(){
   if(!desktop()||!navigator.onLine)return false
+  let diagnostic:UniversalV1DiagnosticContext={stage:'preflight'}
   try{
     const [config,status,identity,outbox,state]=await Promise.all([
       unwrapData<{server_url:string}>(await api.get('/sync/config')),
@@ -19,8 +21,9 @@ async function reconcile(){
       unwrapData<{cursor:string|null}>(await api.get('/sync/v1/state')),
     ])
     const certificate=status.certificate
-    if(!certificate||!identity||certificate.installation_id!==identity.installation_id)return false
+    if(!certificate||!identity||certificate.installation_id!==identity.installation_id){logUniversalV1Failure({name:'UniversalSyncPreflightError',code:'DEVICE_IDENTITY_UNAVAILABLE'},diagnostic);return false}
     const proof=async(action:string,mutations:Mutation[]=[]):Promise<Device>=>{
+      diagnostic={stage:'device_proof'}
       const unsigned={license_id:certificate.license_id,certificate_id:certificate.certificate_id,installation_id:identity.installation_id,device_public_key:identity.public_key,nonce:crypto.randomUUID(),requested_at:new Date().toISOString()}
       const {invoke}=await import('@tauri-apps/api/core')
       const payload=['desktop-universal-sync-v1',action,unsigned.license_id,unsigned.certificate_id,unsigned.installation_id,unsigned.device_public_key,unsigned.nonce,unsigned.requested_at,stable(mutations)].join('\n')
@@ -29,8 +32,10 @@ async function reconcile(){
     const base=config.server_url.replace(/\/$/,'')
     const mutations=outbox.filter(mutation=>pilot.has(mutation.entity_type))
     if(mutations.length){
-      const response=await fetch(`${base}/api/desktop-sync/v1/push`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({device:await proof('push',mutations),mutations})})
-      if(!response.ok){await Promise.all(mutations.map(mutation=>api.post(`/sync/v1/outbox/${mutation.client_id}/retry`,{error:`HOSTED_HTTP_${response.status}`})));return false}
+      const signedDevice=await proof('push',mutations)
+      diagnostic={stage:'hosted_push',change_count:mutations.length,entity_type:mutations.length===1?mutations[0].entity_type:undefined}
+      const response=await fetch(`${base}/api/desktop-sync/v1/push`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({device:signedDevice,mutations})})
+      if(!response.ok){await Promise.all(mutations.map(mutation=>api.post(`/sync/v1/outbox/${mutation.client_id}/retry`,{error:`HOSTED_HTTP_${response.status}`})));logUniversalV1Failure({name:'HostedHttpError',code:'HOSTED_PUSH_FAILED'},{...diagnostic,http_status:response.status});return false}
       for(const result of ((await response.json()).data?.results??[]) as Result[]){
         if(result.status==='acked')await api.post(`/sync/outbox/${result.client_id}/ack`)
         else if(result.status==='conflict')await api.post(`/sync/v1/outbox/${result.client_id}/conflict`)
@@ -40,16 +45,18 @@ async function reconcile(){
     let cursor=state.cursor
     for(;;){
       const device=await proof('pull')
+      diagnostic={stage:'hosted_pull'}
       const response=await fetch(`${base}/api/desktop-sync/v1/pull?${new URLSearchParams({...device,cursor:cursor??''})}`)
-      if(!response.ok)return false
+      if(!response.ok){logUniversalV1Failure({name:'HostedHttpError',code:'HOSTED_PULL_FAILED'},{...diagnostic,http_status:response.status});return false}
       const pulled=(await response.json()).data as {changes:unknown[];cursor:string|null}
+      diagnostic={stage:'local_apply',change_count:pulled.changes.length,local_apply_failed:true}
       await api.post('/sync/v1/apply',pulled)
       if(pulled.changes.length<500)break
       cursor=pulled.cursor
     }
     window.dispatchEvent(new Event('master-data-synced'))
     return true
-  }catch{return false}
+  }catch(error){logUniversalV1Failure(error,diagnostic);return false}
 }
 
 export function reconcileDesktopUniversalV1(){if(active)return active;active=reconcile().finally(()=>{active=null});return active}

@@ -7,9 +7,9 @@ import {fingerprint} from '../license/crypto.js';
 import {activationRequestIsFresh} from '../license/policy.js';
 import {tenantRuntime,type TenantRecord} from '../saas/tenant-context.js';
 import {publishSyncRequired} from './desktop-realtime.js';
+import {serializeUniversalV1Data,universalV1DataSchemas,universalV1Entities,type UniversalV1Entity} from './universal-v1-wire.js';
 
-export const universalV1Entities=['categories','units','customers'] as const;
-type Entity=typeof universalV1Entities[number];
+type Entity=UniversalV1Entity;
 type Runtime={pool:pg.Pool;businessId:number;vendorBusinessId:string};
 type Device=z.infer<typeof deviceSchema>;
 type Mutation=z.infer<typeof mutationSchema>;
@@ -32,11 +32,6 @@ const mutationSchema=z.object({
   data:z.record(z.string(),z.unknown()).nullable(),
 }).strict();
 const requestSchema=z.object({device:deviceSchema,mutations:z.array(mutationSchema).min(1).max(100)}).strict();
-const dataSchemas:Record<Entity,z.ZodTypeAny>={
-  categories:z.object({name:z.string().trim().min(1).max(255),image:z.string().nullable().optional(),is_public:z.boolean()}).strict(),
-  units:z.object({code:z.string().trim().min(1).max(50),name:z.string().trim().min(1).max(255),precision:z.number().int().min(0).max(6),active:z.boolean()}).strict(),
-  customers:z.object({name:z.string().trim().min(1).max(255),phone:z.string().nullable().optional(),email:z.string().email().nullable().optional(),address:z.string().nullable().optional(),notes:z.string().nullable().optional(),active:z.boolean()}).strict(),
-};
 
 const fail=(message:string,statusCode:number,code:string)=>Object.assign(new Error(message),{statusCode,code});
 const stable=(value:unknown):string=>Array.isArray(value)?`[${value.map(stable).join(',')}]`:value&&typeof value==='object'?`{${Object.keys(value as object).sort().map(key=>`${JSON.stringify(key)}:${stable((value as Record<string,unknown>)[key])}`).join(',')}}`:JSON.stringify(value);
@@ -56,7 +51,7 @@ async function deleteEntity(client:pg.PoolClient,entity:Entity,id:number,busines
   return client.query('delete from customers where id=$1 and business_id=$2',[id,businessId]);
 }
 async function upsertEntity(client:pg.PoolClient,entity:Entity,id:number|undefined,businessId:number,data:unknown){
-  const value=dataSchemas[entity].parse(data) as any;
+  const value=universalV1DataSchemas[entity].parse(data) as any;
   if(entity==='categories'){
     if(id)return Number((await client.query('update categories set name=$1,image=$2,is_public=$3,updated_at=now() where id=$4 and business_id=$5 returning id',[value.name,value.image??null,value.is_public,id,businessId])).rows[0].id);
     return Number((await client.query('insert into categories(business_id,name,image,is_public) values($1,$2,$3,$4) returning id',[businessId,value.name,value.image??null,value.is_public])).rows[0].id);
@@ -117,7 +112,7 @@ export async function registerUniversalSyncV1(app:FastifyInstance,{pool,controlP
           await client.query('update master_sync_rows set sync_id=$1 where business_id=$2 and entity_type=$3 and entity_id=$4',[mutation.sync_id,ctx.businessId,mutation.entity_type,entityId]);
         }
         const row=(await client.query('select entity_id,sync_id,payload,deleted,updated_at from master_sync_rows where business_id=$1 and entity_type=$2 and sync_id=$3',[ctx.businessId,mutation.entity_type,mutation.sync_id])).rows[0];
-        const outcome={outcome:'applied',change:row?{entity_type:mutation.entity_type,sync_id:row.sync_id,server_id:Number(row.entity_id),deleted:row.deleted,updated_at:new Date(row.updated_at).toISOString(),data:row.payload}:null};
+        const outcome={outcome:'applied',change:row?{entity_type:mutation.entity_type,sync_id:row.sync_id,server_id:Number(row.entity_id),deleted:row.deleted,updated_at:new Date(row.updated_at).toISOString(),data:row.deleted?null:serializeUniversalV1Data(mutation.entity_type,row.payload)}:null};
         await client.query("insert into sync_mutations(business_id,client_id,entity_type,entity_id,operation,payload,sync_status) values($1,$2,$3,$4,$5,$6,'synced')",[ctx.businessId,mutation.client_id,mutation.entity_type,String(entityId??current?.entity_id),mutation.operation,outcome]);
         results.push({client_id:mutation.client_id,status:'acked',change:outcome.change});
         await client.query('commit');
@@ -142,6 +137,6 @@ export async function registerUniversalSyncV1(app:FastifyInstance,{pool,controlP
         and ($2::timestamptz is null or r.updated_at>$2::timestamptz or (r.updated_at=$2::timestamptz and r.id>$3))
       order by r.updated_at,r.id limit 500`,[ctx.businessId,cursor?.updatedAt??null,cursor?.id??0])).rows;
     const last=rows.at(-1),next=last?`${last.cursor_at}|${last.id}`:(typeof rawCursor==='string'&&rawCursor?rawCursor:null);
-    return{data:{changes:rows.map(row=>({entity_type:row.entity_type,sync_id:row.sync_id,server_id:Number(row.entity_id),deleted:row.deleted,updated_at:new Date(row.updated_at).toISOString(),data:row.payload})),cursor:next}};
+    return{data:{changes:rows.map(row=>({entity_type:row.entity_type,sync_id:row.sync_id,server_id:Number(row.entity_id),deleted:row.deleted,updated_at:new Date(row.updated_at).toISOString(),data:row.deleted?null:serializeUniversalV1Data(entitySchema.parse(row.entity_type),row.payload)})),cursor:next}};
   });
 }
